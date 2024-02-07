@@ -124,12 +124,7 @@ class Learner:
     def run(self):
         # seeding
         set_seeds(self.args.seed)
-
         limit_tensorflow_memory_usage(2048)
-
-        # self.logger.print_and_log("")  # add a blank line
-
-        datasets = dataset_map[self.args.dataset]
 
         # if self.args.use_specified_hypers:
         #     with open(os.path.join(self.args.results, "Seed={}".format(self.args.seed),
@@ -144,6 +139,7 @@ class Learner:
         #     self.args.learning_rate = best_hyperparameters['learning_rate']
         #     self.args.epochs = best_hyperparameters['epochs']
 
+        datasets = dataset_map[self.args.dataset]       
         for dataset in datasets:
             if dataset['enabled'] is False:
                 continue
@@ -164,10 +160,9 @@ class Learner:
                 train_features, train_labels,_,self.class_mapping = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
                                                                             n_classes=self.num_classes,
                                                                             task="train")
-                print("Total samples used for MIA training ={}".format(len(train_features)))
-                print("Total samples used for HPO tuning ={}".format(len(train_features)))  
+                print("Total samples used for MIA and HPO training ={}".format(len(train_features)))
             else:
-                train_features, train_labels,_,_ = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
+                train_features, train_labels,_,self.class_mapping = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
                                                                             n_classes=self.num_classes,
                                                                             task="train")
                 tune_features, tune_labels,_,_ = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
@@ -179,279 +174,253 @@ class Learner:
                 self.args,_ = optimize_hyperparameters(0, self.args, tune_features, tune_labels, self.feature_dim, self.num_classes, self.args.seed)
             
             
-    #         # self.logger.print_and_log("{}".format(dataset['name']))
-    #         self.exp_dir = f"experiment_{self.args.exp_id}"
-    #         self.run_dir = f"Run_{self.args.run_id}"
+            # self.logger.print_and_log("{}".format(dataset['name']))
+            self.exp_dir = f"experiment_{self.args.exp_id}"
+            self.run_dir = f"Run_{self.args.run_id}"
 
-    #         self.run_lira(
-    #             x=train_features,
-    #             y=train_labels,
-    #             test_dataset_reader=self.dataset_reader
-    #         )
+            self.run_lira(
+                x=train_features,
+                y=train_labels,
+                test_dataset_reader=self.dataset_reader
+            )
 
-    # def train_test(
-    #         self,
-    #         train_features,
-    #         train_labels,
-    #         num_classes,
-    #         test_set_reader=None,
-    #         save_model_name=None):
+    def train_test(
+            self,
+            train_features,
+            train_labels,
+            num_classes,
+            test_set_reader=None,
+            save_model_name=None):
 
-    #     self.start_time_final_run = datetime.now()
-    #     # tuning each shadow model ONLY for TD setting
-    #     if self.args.type_of_tuning == 0:
-    #         self.args,_ = optimize_hyperparameters(save_model_name, self.args, train_features, train_labels, self.feature_dim, num_classes, self.args.seed)
-    #     # hp_csv_path = os.path.join(self.args.results,"hypers_config_{}_{}.csv".format(self.args.learnable_params,self.args.dataset))
-    #     # field_names = ["exp_id","run_id","eps","seed","LR","BS","epochs","max_grad_norm","dataset","model","tuning","best_trial","best_trial_acc","test_acc"]
-    #     # if not os.path.exists(hp_csv_path):
-    #     #     with open(hp_csv_path, "w") as csvfile:
-    #     #         writer = csv.DictWriter(csvfile, fieldnames=field_names)
-    #     #         writer.writeheader()
-    #     # else:
-    #     #     row = [{
-    #     #         "exp_id": self.args.exp_id,
-    #     #         "run_id":self.args.run_id,
-    #     #         "eps":self.args.target_epsilon,
-    #     #         "seed":self.args.seed,
-    #     #         "LR":self.args.learning_rate,
-    #     #         "BS":self.args.train_batch_size,
-    #     #         "epochs": self.args.epochs,
-    #     #         "max_grad_norm": self.args.max_grad_norm if self.args.private else -1.,
-    #     #         "dataset": self.args.dataset,
-    #     #         "model": self.args.feature_extractor,
-    #     #         "tuning":self.args.tune_data_type,
-    #     #         "best_trial": 1 if trial.number > 10 else 0,
-    #     #         "best_trial_acc":trial.value,
-    #     #         "test_acc":accuracy.item()
-    #     #         }]
-    #     #     with open(hp_csv_path, "a") as csvfile:
-    #     #         writer = csv.DictWriter(csvfile, fieldnames=field_names)
-    #     #         writer.writerows(row)  
+        self.start_time_final_run = datetime.now()
+        # tuning each shadow model ONLY for TD setting
+        if self.args.type_of_tuning == 0:
+            self.args,_ = optimize_hyperparameters(save_model_name, self.args, train_features, train_labels, self.feature_dim, num_classes, self.args.seed) 
+        
+        train_loader = DataLoader(
+            TensorDataset(train_features, train_labels),
+            batch_size= self.args.train_batch_size if self.args.private else min(self.args.train_batch_size, self.args.max_physical_batch_size),
+            shuffle=True) 
 
-    #     train_loader = DataLoader(
-    #         TensorDataset(train_features, train_labels),
-    #         batch_size= self.args.train_batch_size if self.args.private else min(self.args.train_batch_size, self.args.max_physical_batch_size),
-    #         shuffle=True) 
+        model = self.create_head(feature_dim=self.feature_dim, num_classes=num_classes)
 
-    #     model = self.create_head(feature_dim=self.feature_dim, num_classes=num_classes)
+        if self.args.classifier == 'linear':
+            self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)
+            if test_set_reader is not None:  # use test set for testing
+                accuracy = (self.test_linear(model=model, dataset_reader=test_set_reader)).cpu()
+            else:
+                accuracy = 0.0  # don't test
+        else:
+            print("Invalid classifier option.")
+            sys.exit()
 
-    #     if self.args.classifier == 'linear':
-    #         self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)
-    #         if test_set_reader is not None:  # use test set for testing
-    #             accuracy = (self.test_linear(model=model, dataset_reader=test_set_reader)).cpu()
-    #         else:
-    #             accuracy = 0.0  # don't test
-    #     else:
-    #         print("Invalid classifier option.")
-    #         sys.exit()
+        if save_model_name is not None:
+            self.models[save_model_name] = model
 
-    #     if save_model_name is not None:
-    #         self.models[save_model_name] = model
+        # free up memory
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
 
-    #     # free up memory
-    #     del model
-    #     gc.collect()
-    #     torch.cuda.empty_cache()
+        return accuracy, self.eps
 
-    #     return accuracy, self.eps
+    def fine_tune_batch(self, model, train_loader):
+        model.train()
+        if self.args.optimizer == 'sgd':
+            optimizer = torch.optim.SGD(model.parameters(), lr=self.args.learning_rate, momentum=0.9)
+        elif self.args.optimizer == 'adam':
+            optimizer = torch.optim.Adam(model.parameters(), lr=self.args.learning_rate)
 
-    # def fine_tune_batch(self, model, train_loader):
-    #     model.train()
-    #     if self.args.optimizer == 'sgd':
-    #         optimizer = torch.optim.SGD(model.parameters(), lr=self.args.learning_rate, momentum=0.9)
-    #     elif self.args.optimizer == 'adam':
-    #         optimizer = torch.optim.Adam(model.parameters(), lr=self.args.learning_rate)
+        delta = None
+        if self.args.private:
+            delta = self.args.target_delta
+            privacy_engine = PrivacyEngine(accountant=self.args.accountant, secure_mode=self.args.secure_rng)
 
-    #     delta = None
-    #     if self.args.private:
-    #         delta = self.args.target_delta
-    #         privacy_engine = PrivacyEngine(accountant=self.args.accountant, secure_mode=self.args.secure_rng)
+            #seeded_noise_generator = torch.Generator(device=self.device)
+            #seeded_noise_generator.manual_seed(self.args.seed)
 
-    #         #seeded_noise_generator = torch.Generator(device=self.device)
-    #         #seeded_noise_generator.manual_seed(self.args.seed)
+            model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
+                module=model,
+                optimizer=optimizer,
+                data_loader=train_loader,
+                target_epsilon=self.args.target_epsilon,
+                epochs=self.args.epochs,
+                target_delta=delta,
+                max_grad_norm=self.args.max_grad_norm)
+                #noise_generator=seeded_noise_generator if not self.args.secure_rng else None)
 
-    #         model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
-    #             module=model,
-    #             optimizer=optimizer,
-    #             data_loader=train_loader,
-    #             target_epsilon=self.args.target_epsilon,
-    #             epochs=self.args.epochs,
-    #             target_delta=delta,
-    #             max_grad_norm=self.args.max_grad_norm)
-    #             #noise_generator=seeded_noise_generator if not self.args.secure_rng else None)
+        if self.args.private:
+            for _ in range(self.args.epochs):
+                with BatchMemoryManager(
+                        data_loader=train_loader,
+                        max_physical_batch_size=self.args.max_physical_batch_size,
+                        optimizer=optimizer
+                ) as new_train_loader:
+                    for batch_images, batch_labels in new_train_loader:
+                        batch_images = batch_images.to(self.device)
+                        batch_labels = batch_labels.type(torch.LongTensor).to(self.device)
+                        optimizer.zero_grad()
+                        torch.set_grad_enabled(True)
+                        logits = model(batch_images)
+                        loss = self.loss(logits, batch_labels)
+                        loss.backward()
+                        del logits
+                        optimizer.step()
+                        torch.cuda.empty_cache()
 
-    #     if self.args.private:
-    #         for _ in range(self.args.epochs):
-    #             with BatchMemoryManager(
-    #                     data_loader=train_loader,
-    #                     max_physical_batch_size=self.args.max_physical_batch_size,
-    #                     optimizer=optimizer
-    #             ) as new_train_loader:
-    #                 for batch_images, batch_labels in new_train_loader:
-    #                     batch_images = batch_images.to(self.device)
-    #                     batch_labels = batch_labels.type(torch.LongTensor).to(self.device)
-    #                     optimizer.zero_grad()
-    #                     torch.set_grad_enabled(True)
-    #                     logits = model(batch_images)
-    #                     loss = self.loss(logits, batch_labels)
-    #                     loss.backward()
-    #                     del logits
-    #                     optimizer.step()
-    #                     torch.cuda.empty_cache()
+        else:
+            for _ in range(self.args.epochs):
+                for batch_images, batch_labels in train_loader:
+                    batch_images = batch_images.to(self.device)
+                    batch_labels = batch_labels.type(torch.LongTensor).to(self.device)
+                    optimizer.zero_grad()
+                    torch.set_grad_enabled(True)
+                    logits = model(batch_images)
+                    loss = self.loss(logits, batch_labels)
+                    loss.backward()     
+                    del logits
+                    optimizer.step()
+                    torch.cuda.empty_cache()
 
-    #     else:
-    #         for _ in range(self.args.epochs):
-    #             for batch_images, batch_labels in train_loader:
-    #                 batch_images = batch_images.to(self.device)
-    #                 batch_labels = batch_labels.type(torch.LongTensor).to(self.device)
-    #                 optimizer.zero_grad()
-    #                 torch.set_grad_enabled(True)
-    #                 logits = model(batch_images)
-    #                 loss = self.loss(logits, batch_labels)
-    #                 loss.backward()     
-    #                 del logits
-    #                 optimizer.step()
-    #                 torch.cuda.empty_cache()
+        eps = None
+        if self.args.private:
+            eps = privacy_engine.get_epsilon(delta=delta)
 
-    #     eps = None
-    #     if self.args.private:
-    #         eps = privacy_engine.get_epsilon(delta=delta)
+        return eps, delta
 
-    #     return eps, delta
+    def test_linear(self, model, dataset_reader):
+        model.eval()
 
-    # def test_linear(self, model, dataset_reader):
-    #     model.eval()
+        with torch.no_grad():
+            labels = []
+            predictions = []
+            test_features,test_labels = dataset_reader.load_test_data(class_mapping=self.class_mapping)
+            test_loader = DataLoader(
+                    TensorDataset(test_features, test_labels),
+                    batch_size= self.args.test_batch_size,
+                    shuffle=True)                
+            for batch_images, batch_labels in test_loader:
+                batch_images = batch_images.to(self.device)
+                batch_labels = batch_labels.type(torch.LongTensor).to(self.device)
+                logits = model(batch_images)
+                predictions.append(predict_by_max_logit(logits))
+                labels.append(batch_labels)
+                del logits
+                torch.cuda.empty_cache()
+            predictions = torch.hstack(predictions)
+            labels = torch.hstack(labels)
+            accuracy = compute_accuracy_from_predictions(predictions, labels)
+        return accuracy
 
-    #     with torch.no_grad():
-    #         labels = []
-    #         predictions = []
-    #         test_features,test_labels = dataset_reader.load_test_data(class_mapping=self.class_mapping)
-    #         test_loader = DataLoader(
-    #                 TensorDataset(test_features, test_labels),
-    #                 batch_size= self.args.test_batch_size,
-    #                 shuffle=True)                
-    #         for batch_images, batch_labels in test_loader:
-    #             batch_images = batch_images.to(self.device)
-    #             batch_labels = batch_labels.type(torch.LongTensor).to(self.device)
-    #             logits = model(batch_images)
-    #             predictions.append(predict_by_max_logit(logits))
-    #             labels.append(batch_labels)
-    #             del logits
-    #             torch.cuda.empty_cache()
-    #         predictions = torch.hstack(predictions)
-    #         labels = torch.hstack(labels)
-    #         accuracy = compute_accuracy_from_predictions(predictions, labels)
-    #     return accuracy
+    def run_lira(self, x, y, test_dataset_reader):
+        # Sample weights are set to `None` by default, but can be changed here.
+        sample_weight = None
+        n = x.shape[0]
+        # delta = self.args.target_delta
 
-    # def run_lira(self, x, y, test_dataset_reader):
-    #     # Sample weights are set to `None` by default, but can be changed here.
-    #     sample_weight = None
-    #     n = x.shape[0]
-    #     # delta = self.args.target_delta
+        # Train the target and shadow models. We will use one of the model in `models`
+        # as target and the rest as shadow.
+        # Here we use the same architecture and optimizer. In practice, they might
+        # differ between the target and shadow models.
+        in_indices = []  # a list of in-training indices for all models
+        stat = []  # a list of statistics for all models
+        losses = []  # a list of losses for all models
+        for idx in range(self.args.num_shadow_models + 1):
+            # Generate a binary array indicating which example to include for training
+            in_indices.append(np.random.binomial(1, 0.5, n).astype(bool))
 
-    #     # Train the target and shadow models. We will use one of the model in `models`
-    #     # as target and the rest as shadow.
-    #     # Here we use the same architecture and optimizer. In practice, they might
-    #     # differ between the target and shadow models.
-    #     in_indices = []  # a list of in-training indices for all models
-    #     stat = []  # a list of statistics for all models
-    #     losses = []  # a list of losses for all models
-    #     for idx in range(self.args.num_shadow_models + 1):
-    #         # Generate a binary array indicating which example to include for training
-    #         in_indices.append(np.random.binomial(1, 0.5, n).astype(bool))
+            model_train_images = x[in_indices[-1]]
+            model_train_labels = y[in_indices[-1]]
+            model_train_images = model_train_images.to(self.device)
+            model_train_labels = model_train_labels.to(self.device)
 
-    #         model_train_images = x[in_indices[-1]]
-    #         model_train_labels = y[in_indices[-1]]
-    #         model_train_images = model_train_images.to(self.device)
-    #         model_train_labels = model_train_labels.to(self.device)
+            accuracy, eps = self.train_test(
+                train_features=model_train_images,
+                train_labels=model_train_labels,
+                num_classes=self.num_classes,
+                test_set_reader=test_dataset_reader,
+                save_model_name = idx  # save the model, so we can load it and get challenge example losses
+            )
 
-    #         accuracy, eps = self.train_test(
-    #             train_features=model_train_images,
-    #             train_labels=model_train_labels,
-    #             num_classes=self.num_classes,
-    #             test_set_reader=test_dataset_reader,
-    #             save_model_name = idx  # save the model, so we can load it and get challenge example losses
-    #         )
+            print(f'Trained model #{idx} with {in_indices[-1].sum()} examples. Accuracy = {accuracy}. Epsilon = {eps}')
+            curr_model = self.models[idx]
+            s, l = self.get_stat_and_loss_aug(curr_model, x, y.numpy(), sample_weight)
+            stat.append(s)
+            losses.append(l)
 
-    #         print(f'Trained model #{idx} with {in_indices[-1].sum()} examples. Accuracy = {accuracy}. Epsilon = {eps}')
-    #         curr_model = self.models[idx]
-    #         s, l = self.get_stat_and_loss_aug(curr_model, x, y.numpy(), sample_weight)
-    #         stat.append(s)
-    #         losses.append(l)
+            # Avoid OOM
+            gc.collect()
 
-    #         # Avoid OOM
-    #         gc.collect()
+        # save stat and in_indices
+        directory = os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'stat_{}_{}_{}.pkl'.format(
+                self.args.learnable_params,
+                self.args.examples_per_class,
+                int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
+            pickle.dump(stat, f)
+        with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'losses_{}_{}_{}.pkl'.format(
+                self.args.learnable_params,
+                self.args.examples_per_class,
+                int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
+            pickle.dump(losses, f)
+        with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'in_indices_{}_{}_{}.pkl'.format(
+                self.args.learnable_params,
+                self.args.examples_per_class,
+                int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
+            pickle.dump(in_indices, f)
 
-    #     # save stat and in_indices
-    #     directory = os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
-    #     if not os.path.exists(directory):
-    #         os.makedirs(directory)
-    #     with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'stat_{}_{}_{}.pkl'.format(
-    #             self.args.learnable_params,
-    #             self.args.examples_per_class,
-    #             int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
-    #         pickle.dump(stat, f)
-    #     with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'losses_{}_{}_{}.pkl'.format(
-    #             self.args.learnable_params,
-    #             self.args.examples_per_class,
-    #             int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
-    #         pickle.dump(losses, f)
-    #     with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'in_indices_{}_{}_{}.pkl'.format(
-    #             self.args.learnable_params,
-    #             self.args.examples_per_class,
-    #             int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
-    #         pickle.dump(in_indices, f)
+    def get_stat_and_loss_aug(self,
+                              model,
+                              x,
+                              y,
+                              sample_weight=None,
+                              batch_size=4096):
+        """A helper function to get the statistics and losses.
 
-    # def get_stat_and_loss_aug(self,
-    #                           model,
-    #                           x,
-    #                           y,
-    #                           sample_weight=None,
-    #                           batch_size=4096):
-    #     """A helper function to get the statistics and losses.
+        Here we get the statistics and losses for the images.
 
-    #     Here we get the statistics and losses for the images.
+        Args:
+            model: model to make prediction
+            x: samples
+            y: true labels of samples (integer valued)
+            sample_weight: a vector of weights of shape (n_samples, ) that are
+                assigned to individual samples. If not provided, then each sample is
+                given unit weight. Only the LogisticRegressionAttacker and the
+                RandomForestAttacker support sample weights.
+            batch_size: the batch size for model.predict
 
-    #     Args:
-    #         model: model to make prediction
-    #         x: samples
-    #         y: true labels of samples (integer valued)
-    #         sample_weight: a vector of weights of shape (n_samples, ) that are
-    #             assigned to individual samples. If not provided, then each sample is
-    #             given unit weight. Only the LogisticRegressionAttacker and the
-    #             RandomForestAttacker support sample weights.
-    #         batch_size: the batch size for model.predict
+        Returns:
+            the statistics and cross-entropy losses
+        """
+        losses, stat = [], []
+        data = x.to(self.device)
+        data_size = len(data)
+        num_sub_batches = self._get_number_of_sub_batches(data_size, self.args.test_batch_size)
+        for batch in range(num_sub_batches):
+            batch_start_index, batch_end_index = self._get_sub_batch_indices(batch, data_size, self.args.test_batch_size)
+            with torch.no_grad():
+                logits = model(data[batch_start_index: batch_end_index]).cpu().numpy()
+            prob = convert_logit_to_prob(logits)
+            losses.append(log_loss(y[batch_start_index: batch_end_index], prob, sample_weight=sample_weight))
+            stat.append(calculate_statistic(prob, y[batch_start_index: batch_end_index], sample_weight=sample_weight, is_logits=False))
+        return np.expand_dims(np.concatenate(stat), axis=1), np.expand_dims(np.concatenate(losses), axis=1)
 
-    #     Returns:
-    #         the statistics and cross-entropy losses
-    #     """
-    #     losses, stat = [], []
-    #     data = x.to(self.device)
-    #     data_size = len(data)
-    #     num_sub_batches = self._get_number_of_sub_batches(data_size, self.args.test_batch_size)
-    #     for batch in range(num_sub_batches):
-    #         batch_start_index, batch_end_index = self._get_sub_batch_indices(batch, data_size, self.args.test_batch_size)
-    #         with torch.no_grad():
-    #             logits = model(data[batch_start_index: batch_end_index]).cpu().numpy()
-    #         prob = convert_logit_to_prob(logits)
-    #         losses.append(log_loss(y[batch_start_index: batch_end_index], prob, sample_weight=sample_weight))
-    #         stat.append(calculate_statistic(prob, y[batch_start_index: batch_end_index], sample_weight=sample_weight, is_logits=False))
-    #     return np.expand_dims(np.concatenate(stat), axis=1), np.expand_dims(np.concatenate(losses), axis=1)
+    def _get_number_of_sub_batches(self, task_size, sub_batch_size):
+        num_batches = int(np.ceil(float(task_size) / float(sub_batch_size)))
+        if num_batches > 1 and (task_size % sub_batch_size == 1):
+            num_batches -= 1
+        return num_batches
 
-    # def _get_number_of_sub_batches(self, task_size, sub_batch_size):
-    #     num_batches = int(np.ceil(float(task_size) / float(sub_batch_size)))
-    #     if num_batches > 1 and (task_size % sub_batch_size == 1):
-    #         num_batches -= 1
-    #     return num_batches
-
-    # def _get_sub_batch_indices(self, index, task_size, sub_batch_size):
-    #     batch_start_index = index * sub_batch_size
-    #     batch_end_index = batch_start_index + sub_batch_size
-    #     if batch_end_index == (task_size - 1):  # avoid batch size of 1
-    #         batch_end_index = task_size
-    #     if batch_end_index > task_size:
-    #         batch_end_index = task_size
-    #     return batch_start_index, batch_end_index
+    def _get_sub_batch_indices(self, index, task_size, sub_batch_size):
+        batch_start_index = index * sub_batch_size
+        batch_end_index = batch_start_index + sub_batch_size
+        if batch_end_index == (task_size - 1):  # avoid batch size of 1
+            batch_end_index = task_size
+        if batch_end_index > task_size:
+            batch_end_index = task_size
+        return batch_start_index, batch_end_index
 
 
 if __name__ == "__main__":
