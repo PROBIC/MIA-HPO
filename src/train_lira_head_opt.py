@@ -15,7 +15,7 @@ from datetime import datetime
 import csv
 from opacus import PrivacyEngine
 from opacus.utils.batch_memory_manager import BatchMemoryManager
-from optimization import optimize_hyperparameters
+from hpo import optimize_hyperparameters
 import gc
 import sys
 import warnings
@@ -32,10 +32,10 @@ def main():
 class Learner:
     def __init__(self):
         self.args = self.parse_command_line()
-        # self.logger = Logger(self.args.checkpoint_dir, 'log.txt')
+        # self.logger = Logger(self.args.results, 'log.txt')
         # self.start_time = datetime.now()
         # self.logger.print_and_log("Options: %s\n" % self.args)
-        # self.logger.print_and_log("Checkpoint Directory: %s\n" % self.args.checkpoint_dir)
+        # self.logger.print_and_log("Checkpoint Directory: %s\n" % self.args.results)
 
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -48,6 +48,10 @@ class Learner:
         self.exp_dir = None
         self.run_dir = None
         self.models = {}
+        # for recording the best trials hypers
+        self.optimal_args = {"learning_rate":[],
+                             "max_grad_norm":[],
+                             "batch_size":[]}
 
     """
     Command line parser
@@ -66,26 +70,28 @@ class Learner:
         parser.add_argument("--download_path_for_tensorflow_datasets", default=None,
                             help="Path to download the tensorflow datasets.")
         parser.add_argument("--results", help="Directory to load results from.")
-        parser.add_argument("--checkpoint_dir", "-c", default='../checkpoints',
-                            help="Directory to save checkpoint to.")
+        # parser.add_argument("--checkpoint_dir", "-c", default='../checkpoints',
+        #                     help="Directory to save checkpoint to.")
         parser.add_argument("--train_batch_size", "-b", type=int, default=200, help="Batch size.")
         parser.add_argument("--learning_rate", "-lr", type=float, default=0.003, help="Learning rate.")
-        parser.add_argument("--epochs", "-e", type=int, default=400, help="Number of fine-tune epochs.")
+        parser.add_argument("--epochs", "-e", type=int, default=10, help="Number of fine-tune epochs.")
 
         parser.add_argument("--test_batch_size", "-tb", type=int, default=600, help="Batch size.")
         parser.add_argument("--examples_per_class", type=int, default=None,
                             help="Examples per class when doing few-shot. -1 indicates to use the entire training set.")
         parser.add_argument("--seed", type=int, default=0, help="Seed for datasets, trainloader and opacus")
-        parser.add_argument("--optuna_trials", type=int, default=1, help="Number of trials used for HP tuning.")
         parser.add_argument("--exp_id", type=int, default=None,
                             help="Experiment ID.")
         parser.add_argument("--run_id", type=int, default=None,
                             help="Run ID for rerunning the whole experiment.")
         # HPO
-        parser.add_argument("--type_of_tuning", type=int, default=0, help="For TD-HPO set the variable to 0, for ED-HPO set it to 1.")
-        parser.add_argument("--use_specified_hypers", action="store_true", help="If specified, use specified hypers and don't optimize them.")
-        parser.add_argument("--epochs_lb", type=int, default=1, help="LB of fine-tune epochs.")
-        parser.add_argument("--epochs_ub", type=int, default=200, help="UB of fine-tune epochs.")
+        parser.add_argument("--sampler", type=str, default="BO", help="Type of sample to be used for HPO.")
+        parser.add_argument("--type_of_tuning", type=int, default=0, 
+                            help="For TD-HPO set the variable to 0, for ED-HPO set it to 1.")
+        # parser.add_argument("--hpo_repeats", type=int, default=1, help="The number of trials for optuna for ED-HPO")
+
+        # parser.add_argument("--epochs_lb", type=int, default=1, help="LB of fine-tune epochs.")
+        # parser.add_argument("--epochs_ub", type=int, default=200, help="UB of fine-tune epochs.")
         parser.add_argument("--train_batch_size_lb", type=int, default=10, help="LB of Batch size.")
         parser.add_argument("--train_batch_size_ub", type=int, default=1000, help="UB of Batch size.")
         parser.add_argument("--max_grad_norm_lb", type=float, default=0.2, help="LB of maximum gradient norm.")
@@ -126,21 +132,20 @@ class Learner:
         set_seeds(self.args.seed)
         limit_tensorflow_memory_usage(2048)
 
-        # if self.args.use_specified_hypers:
-        #     with open(os.path.join(self.args.results, "Seed={}".format(self.args.seed),
-        #                                     "Run_{}".format(self.args.run_id),
-        #                                     "experiment_{}".format(self.args.exp_id), 
-        #                                     'best_hyperparameters.pkl'), "rb") as f:
-        #         best_hyperparameters = pickle.load(f)
+        self.accuracies = {"in":np.zeros((self.args.num_shadow_models + 1,)),
+                           "out":np.zeros((self.args.num_shadow_models + 1,)),
+                           "test":np.zeros((self.args.num_shadow_models + 1,))}
         
-        #     if self.args.private:
-        #         self.args.max_grad_norm = best_hyperparameters['max_grad_norm']
-        #     self.args.train_batch_size = best_hyperparameters['train_batch_size']
-        #     self.args.learning_rate = best_hyperparameters['learning_rate']
-        #     self.args.epochs = best_hyperparameters['epochs']
+        # ensure the directory to hold results exists
+        self.exp_dir = f"experiment_{self.args.exp_id}"
+        self.run_dir = f"Run_{self.args.run_id}"
+        directory = os.path.join(self.args.results, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
 
         datasets = dataset_map[self.args.dataset]       
         for dataset in datasets:
+            # self.logger.print_and_log("{}".format(dataset['name']))
             if dataset['enabled'] is False:
                 continue
 
@@ -155,28 +160,56 @@ class Learner:
             
             self.feature_dim = self.dataset_reader.obtain_feature_dim()
 
+            train_features, train_labels, training_indices, self.class_mapping = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
+                                                                                                                        n_classes=self.num_classes,
+                                                                                                                        task="train")
+            with open(os.path.join(self.args.results, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'train_{}_{}_{}.pkl'.format(
+                    self.args.learnable_params,
+                    self.args.examples_per_class,
+                    int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
+                    pickle.dump(training_indices, f)
+
             # create the training and tuning datasets
             if self.args.type_of_tuning == 0:
-                train_features, train_labels,_,self.class_mapping = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
-                                                                            n_classes=self.num_classes,
-                                                                            task="train")
-                print("Total samples used for MIA and HPO training ={}".format(len(train_features)))
-            else:
-                train_features, train_labels,_,self.class_mapping = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
-                                                                            n_classes=self.num_classes,
-                                                                            task="train")
-                tune_features, tune_labels,_,_ = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
-                                                                            n_classes=self.num_classes,
-                                                                            task="tune")
-                print("Total samples used for MIA training ={}".format(len(train_features)))  
-                print("Total samples used for HPO tuning ={}".format(len(tune_features)))   
+                print("Total samples used for MIA training ={}".format(len(train_features)))
+                # select a subset of training samples for HPO
+                hpo_indices = np.random.binomial(1, 0.5, train_features.shape[0]).astype(bool)
+                print("Total samples used for HPO training ={}".format(len(hpo_indices)))
 
-                self.args,_ = optimize_hyperparameters(0, self.args, tune_features, tune_labels, self.feature_dim, self.num_classes, self.args.seed)
-            
-            
-            # self.logger.print_and_log("{}".format(dataset['name']))
-            self.exp_dir = f"experiment_{self.args.exp_id}"
-            self.run_dir = f"Run_{self.args.run_id}"
+                with open(os.path.join(self.args.results, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'tune_{}_{}_{}.pkl'.format(
+                        self.args.learnable_params,
+                        self.args.examples_per_class,
+                        int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
+                        pickle.dump(hpo_indices, f) 
+
+                self.args,_ = optimize_hyperparameters(1, self.args, train_features[hpo_indices], 
+                                                       train_labels[hpo_indices], self.feature_dim, 
+                                                       self.num_classes, self.args.seed)
+                self.optimal_args["learning_rate"].append(self.args.learning_rate)
+                self.optimal_args["batch_size"].append(self.args.train_batch_size)
+                if self.args.private:
+                    self.optimal_args["max_grad_norm"].append(self.args.max_grad_norm)
+
+            else:
+                tune_features, tune_labels, tune_indices,_ = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
+                                                                                                 n_classes=self.num_classes,
+                                                                                                 task="tune")
+                print("Total samples used for MIA training ={}".format(len(train_features)))  
+                print("Total samples used for HPO tuning ={}".format(len(tune_features)))  
+
+                with open(os.path.join(self.args.results, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'tune_{}_{}_{}.pkl'.format(
+                        self.args.learnable_params,
+                        self.args.examples_per_class,
+                        int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
+                        pickle.dump(tune_indices, f) 
+
+                self.args,_ = optimize_hyperparameters(1, self.args, tune_features, tune_labels, 
+                                                       self.feature_dim, self.num_classes, 
+                                                       self.args.seed)
+                self.optimal_args["learning_rate"].append(self.args.learning_rate)
+                self.optimal_args["batch_size"].append(self.args.train_batch_size)
+                if self.args.private:
+                    self.optimal_args["max_grad_norm"].append(self.args.max_grad_norm)
 
             self.run_lira(
                 x=train_features,
@@ -193,10 +226,6 @@ class Learner:
             save_model_name=None):
 
         self.start_time_final_run = datetime.now()
-        # tuning each shadow model ONLY for TD setting
-        if self.args.type_of_tuning == 0:
-            self.args,_ = optimize_hyperparameters(save_model_name, self.args, train_features, train_labels, self.feature_dim, num_classes, self.args.seed) 
-        
         train_loader = DataLoader(
             TensorDataset(train_features, train_labels),
             batch_size= self.args.train_batch_size if self.args.private else min(self.args.train_batch_size, self.args.max_physical_batch_size),
@@ -206,8 +235,12 @@ class Learner:
 
         if self.args.classifier == 'linear':
             self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)
+            accuracy = self.validate_linear(model,train_loader)
+            self.accuracies["in"][save_model_name] = accuracy 
+            
             if test_set_reader is not None:  # use test set for testing
                 accuracy = (self.test_linear(model=model, dataset_reader=test_set_reader)).cpu()
+                self.accuracies["test"][save_model_name] = accuracy
             else:
                 accuracy = 0.0  # don't test
         else:
@@ -236,9 +269,6 @@ class Learner:
             delta = self.args.target_delta
             privacy_engine = PrivacyEngine(accountant=self.args.accountant, secure_mode=self.args.secure_rng)
 
-            #seeded_noise_generator = torch.Generator(device=self.device)
-            #seeded_noise_generator.manual_seed(self.args.seed)
-
             model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
                 module=model,
                 optimizer=optimizer,
@@ -247,7 +277,6 @@ class Learner:
                 epochs=self.args.epochs,
                 target_delta=delta,
                 max_grad_norm=self.args.max_grad_norm)
-                #noise_generator=seeded_noise_generator if not self.args.secure_rng else None)
 
         if self.args.private:
             for _ in range(self.args.epochs):
@@ -288,6 +317,24 @@ class Learner:
 
         return eps, delta
 
+    def validate_linear(self, model, val_loader):
+        model.eval()
+
+        with torch.no_grad():
+            labels = []
+            predictions = []
+            for batch_images, batch_labels in val_loader:
+                batch_images = batch_images.to(DEVICE)
+                batch_labels = batch_labels.type(torch.LongTensor).to(DEVICE)
+                logits = model(batch_images)
+                predictions.append(predict_by_max_logit(logits))
+                labels.append(batch_labels)
+                del logits
+            predictions = torch.hstack(predictions)
+            labels = torch.hstack(labels)
+            accuracy = compute_accuracy_from_predictions(predictions, labels)
+        return accuracy
+
     def test_linear(self, model, dataset_reader):
         model.eval()
 
@@ -327,6 +374,7 @@ class Learner:
         losses = []  # a list of losses for all models
         for idx in range(self.args.num_shadow_models + 1):
             # Generate a binary array indicating which example to include for training
+            np.random.seed(idx+1) # set the seed for drawing in-samples to the model index
             in_indices.append(np.random.binomial(1, 0.5, n).astype(bool))
 
             model_train_images = x[in_indices[-1]]
@@ -341,9 +389,17 @@ class Learner:
                 test_set_reader=test_dataset_reader,
                 save_model_name = idx  # save the model, so we can load it and get challenge example losses
             )
-
-            print(f'Trained model #{idx} with {in_indices[-1].sum()} examples. Accuracy = {accuracy}. Epsilon = {eps}')
             curr_model = self.models[idx]
+
+            out_dataloader = DataLoader(
+                            TensorDataset(x[~in_indices[-1]], y[~in_indices[-1]]),
+                            batch_size= self.args.train_batch_size if self.args.private else min(self.args.train_batch_size, self.args.max_physical_batch_size),
+                            shuffle=True) 
+            
+            out_accuracy = self.validate_linear(curr_model, out_dataloader)
+            self.accuracies["out"][idx] = out_accuracy
+            
+            print(f'Trained model #{idx} with {in_indices[-1].sum()} examples. Test Accuracy = {accuracy}. Epsilon = {eps}')
             s, l = self.get_stat_and_loss_aug(curr_model, x, y.numpy(), sample_weight)
             stat.append(s)
             losses.append(l)
@@ -351,25 +407,34 @@ class Learner:
             # Avoid OOM
             gc.collect()
 
-        # save stat and in_indices
-        directory = os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-        with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'stat_{}_{}_{}.pkl'.format(
+        # save stat, losses, in_indices, optimal hypers, train/test accuracies
+        with open(os.path.join(self.args.results, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'stat_{}_{}_{}.pkl'.format(
                 self.args.learnable_params,
                 self.args.examples_per_class,
                 int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
             pickle.dump(stat, f)
-        with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'losses_{}_{}_{}.pkl'.format(
+        with open(os.path.join(self.args.results, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'losses_{}_{}_{}.pkl'.format(
                 self.args.learnable_params,
                 self.args.examples_per_class,
                 int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
             pickle.dump(losses, f)
-        with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'in_indices_{}_{}_{}.pkl'.format(
+        with open(os.path.join(self.args.results, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'in_indices_{}_{}_{}.pkl'.format(
                 self.args.learnable_params,
                 self.args.examples_per_class,
                 int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
             pickle.dump(in_indices, f)
+        with open(os.path.join(self.args.results, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'opt_args_{}_{}_{}.pkl'.format(
+                self.args.learnable_params,
+                self.args.examples_per_class,
+                int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
+            pickle.dump(self.optimal_args, f) 
+
+        with open(os.path.join(self.args.results, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'accs_{}_{}_{}.pkl'.format(
+                self.args.learnable_params,
+                self.args.examples_per_class,
+                int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
+            pickle.dump(self.accuracies, f)         
+
 
     def get_stat_and_loss_aug(self,
                               model,
@@ -378,7 +443,6 @@ class Learner:
                               sample_weight=None,
                               batch_size=4096):
         """A helper function to get the statistics and losses.
-
         Here we get the statistics and losses for the images.
 
         Args:

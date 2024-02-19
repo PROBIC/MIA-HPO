@@ -39,6 +39,20 @@ def main():
         in_indices = pickle.load(f)
     with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'experiment_{}'.format(args.exp_id), 'stat_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
         stat = pickle.load(f)
+    with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'train_{}'.format(args.exp_id), 'stat_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
+        train_indices = pickle.load(f)  
+    if args.run_id % 2 == 0:
+        # only load the TD-HPO indices 
+        with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id-1), 'tune_{}'.format(args.exp_id), 'stat_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
+            tune_bool_indices = pickle.load(f)
+    else:
+        with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'tune_{}'.format(args.exp_id), 'stat_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
+            tune_bool_indices = pickle.load(f)   
+    # using only TD-HPO indices for evaluating the scores
+    hpo_indices = [train_indices[j] for j in range(len(train_indices)) if tune_bool_indices[j] == True]
+    curated_indices = []
+    for idx in range(NUM_TARGET_MODELS):
+        curated_indices.append(in_indices[idx][hpo_indices])
     n = len(stat[0])
     # Now we do MIA for each model
     all_scores = []
@@ -46,8 +60,7 @@ def main():
     for idx in range(NUM_TARGET_MODELS):
         print(f'Target model is #{idx}')
         stat_target = stat[idx]  # statistics of target model, shape (n, k)
-        in_indices_target = in_indices[idx]  # ground-truth membership, shape (n,)
-        
+        in_indices_target = curated_indices[idx]  # ground-truth membership, shape (n,)
         # `stat_shadow` contains statistics of the shadow models, with shape
         # (num_shadows, n, k). `in_indices_shadow` contains membership of the shadow
         # models, with shape (num_shadows, n). We will use them to get a list
@@ -56,7 +69,7 @@ def main():
         # (resp. without) the j-th example, and k being the number of augmentations
         # (1 in our case).
         stat_shadow = np.array(stat[:idx] + stat[idx + 1:])
-        in_indices_shadow = np.array(in_indices[:idx] + in_indices[idx + 1:])
+        in_indices_shadow = np.array(curated_indices[:idx] + curated_indices[idx + 1:])
         stat_in = [stat_shadow[:, j][in_indices_shadow[:, j]] for j in range(n)]
         stat_out = [stat_shadow[:, j][~in_indices_shadow[:, j]] for j in range(n)]
 
