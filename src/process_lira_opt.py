@@ -6,9 +6,6 @@ import numpy as np
 import os
 from lira import compute_score_lira
 import argparse
-from sklearn.metrics import confusion_matrix
-
-#NUM_TARGET_MODELS = 6
 
 def main():
     parser = argparse.ArgumentParser()
@@ -39,27 +36,26 @@ def main():
         in_indices = pickle.load(f)
     with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'experiment_{}'.format(args.exp_id), 'stat_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
         stat = pickle.load(f)
-    with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'train_{}'.format(args.exp_id), 'stat_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
-        train_indices = pickle.load(f)  
     if args.run_id % 2 == 0:
         # only load the TD-HPO indices 
         with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id-1), 'tune_{}'.format(args.exp_id), 'stat_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
-            tune_bool_indices = pickle.load(f)
+            tune_indices = pickle.load(f)
     else:
         with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'tune_{}'.format(args.exp_id), 'stat_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
-            tune_bool_indices = pickle.load(f)   
-    # using only TD-HPO indices for evaluating the scores
-    hpo_indices = [train_indices[j] for j in range(len(train_indices)) if tune_bool_indices[j] == True]
+            tune_indices = pickle.load(f)   
+    # converting boolean index to numeric
+    train_indices = np.arange(0,tune_indices.shape[0])
+    hpo_indices = [train_indices[j] for j in range(len(train_indices)) if tune_indices[j] == True]
     curated_indices = []
     for idx in range(NUM_TARGET_MODELS):
         curated_indices.append(in_indices[idx][hpo_indices])
-    n = len(stat[0])
+    n = len(hpo_indices)
     # Now we do MIA for each model
     all_scores = []
     all_y_true = []
     for idx in range(NUM_TARGET_MODELS):
         print(f'Target model is #{idx}')
-        stat_target = stat[idx]  # statistics of target model, shape (n, k)
+        stat_target = stat[idx][hpo_indices]  # statistics of target model, shape (n, k)
         in_indices_target = curated_indices[idx]  # ground-truth membership, shape (n,)
         # `stat_shadow` contains statistics of the shadow models, with shape
         # (num_shadows, n, k). `in_indices_shadow` contains membership of the shadow
@@ -81,10 +77,9 @@ def main():
         #                                      np.ones(len(scores[~in_indices_target]))))
 
         # preserve the order of samples
-        y_score = scores
         y_true = [0 if mask else 1 for mask in in_indices_target]
 
-        all_scores.append(y_score)
+        all_scores.append(scores)
         all_y_true.append(y_true)
     
 
@@ -94,10 +89,9 @@ def main():
             'y_true': all_y_true,
             'scores': all_scores
             }
-    if not os.path.exists(os.path.join(args.results,'Seed={}'.format(args.seed))):
-        os.makedirs(os.path.join(args.results,'Seed={}'.format(args.seed)))
-    with open(os.path.join(args.results,'Seed={}'.format(args.seed),'scores_run_{}_exp_{}_config_{}_shots_{}_eps_{}.pkl'.format(args.run_id, args.exp_id, config, shot, epsilon)), "wb") as f:
-        pickle.dump(result, f)
+
+    with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'experiment_{}'.format(args.exp_id), 'scores_{}_{}_{}.pkl'.format(config, shot, epsilon)), "wb") as f:
+        pickle.dump(result,f)
 
 if __name__ == '__main__':
     main()

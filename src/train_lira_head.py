@@ -85,7 +85,9 @@ class Learner:
         parser.add_argument("--run_id", type=int, default=None,
                             help="Run ID for rerunning the whole experiment.")
         # HPO
-        parser.add_argument("--type_of_tuning", type=int, default=0, help="For TD-HPO set the variable to 0, for ED-HPO set it to 1.")
+        parser.add_argument("--sampler", type=str, default="BO", help="Type of sample to be used for HPO.")
+        parser.add_argument("--type_of_tuning", type=int, default=0, 
+                            help="For TD-HPO set the variable to 0, for ED-HPO set it to 1.")
         parser.add_argument("--hpo_repeats", type=int, default=1, help="The number of trials for optuna for ED-HPO")
 
         # parser.add_argument("--epochs_lb", type=int, default=1, help="LB of fine-tune epochs.")
@@ -313,7 +315,6 @@ class Learner:
 
     def validate_linear(self, model, val_loader):
         model.eval()
-
         with torch.no_grad():
             labels = []
             predictions = []
@@ -394,7 +395,9 @@ class Learner:
             self.accuracies["out"][idx] = out_accuracy
             
             print(f'Trained model #{idx} with {in_indices[-1].sum()} examples. Test Accuracy = {accuracy}. Epsilon = {eps}')
-            s, l = self.get_stat_and_loss_aug(curr_model, x, y.numpy(), sample_weight)
+            s, l,_ = self.get_stat_and_loss_aug(curr_model, x, y.numpy(), sample_weight)
+            if np.isnan(s).any():
+                print(f"NaNs found for model #{idx}")
             stat.append(s)
             losses.append(l)
 
@@ -431,12 +434,12 @@ class Learner:
 
 
     def get_stat_and_loss_aug(self,
-                              model,
-                              x,
-                              y,
-                              sample_weight=None,
-                              batch_size=4096):
+            model,
+            x,
+            y,
+            sample_weight=None):
         """A helper function to get the statistics and losses.
+
         Here we get the statistics and losses for the images.
 
         Args:
@@ -452,33 +455,66 @@ class Learner:
         Returns:
             the statistics and cross-entropy losses
         """
-        losses, stat = [], []
-        data = x.to(self.device)
-        data_size = len(data)
-        num_sub_batches = self._get_number_of_sub_batches(data_size, self.args.test_batch_size)
-        for batch in range(num_sub_batches):
-            batch_start_index, batch_end_index = self._get_sub_batch_indices(batch, data_size, self.args.test_batch_size)
-            with torch.no_grad():
-                logits = model(data[batch_start_index: batch_end_index]).cpu().numpy()
-            prob = convert_logit_to_prob(logits)
-            losses.append(log_loss(y[batch_start_index: batch_end_index], prob, sample_weight=sample_weight))
-            stat.append(calculate_statistic(prob, y[batch_start_index: batch_end_index], sample_weight=sample_weight, is_logits=False))
-        return np.expand_dims(np.concatenate(stat), axis=1), np.expand_dims(np.concatenate(losses), axis=1)
+        losses, stat, accuracies = [], [], []
+        data = x.to(DEVICE)
+        with torch.no_grad():
+            logits = model(data).cpu().numpy()
+            predictions = np.argmax(logits, axis=-1)
+            accuracies.append((y == predictions).astype(float))
+        prob = convert_logit_to_prob(logits)
+        losses.append(log_loss(y, prob, sample_weight=sample_weight))
+        stat.append(calculate_statistic(prob, y, sample_weight=sample_weight, is_logits=False))
+        return np.expand_dims(np.concatenate(stat), axis=1), np.expand_dims(np.concatenate(losses), axis=1), np.expand_dims(np.concatenate(accuracies), axis=1)
 
-    def _get_number_of_sub_batches(self, task_size, sub_batch_size):
-        num_batches = int(np.ceil(float(task_size) / float(sub_batch_size)))
-        if num_batches > 1 and (task_size % sub_batch_size == 1):
-            num_batches -= 1
-        return num_batches
+    # def get_stat_and_loss_aug(self,
+    #                           model,
+    #                           x,
+    #                           y,
+    #                           sample_weight=None,
+    #                           batch_size=4096):
+    #     """A helper function to get the statistics and losses.
+    #     Here we get the statistics and losses for the images.
 
-    def _get_sub_batch_indices(self, index, task_size, sub_batch_size):
-        batch_start_index = index * sub_batch_size
-        batch_end_index = batch_start_index + sub_batch_size
-        if batch_end_index == (task_size - 1):  # avoid batch size of 1
-            batch_end_index = task_size
-        if batch_end_index > task_size:
-            batch_end_index = task_size
-        return batch_start_index, batch_end_index
+    #     Args:
+    #         model: model to make prediction
+    #         x: samples
+    #         y: true labels of samples (integer valued)
+    #         sample_weight: a vector of weights of shape (n_samples, ) that are
+    #             assigned to individual samples. If not provided, then each sample is
+    #             given unit weight. Only the LogisticRegressionAttacker and the
+    #             RandomForestAttacker support sample weights.
+    #         batch_size: the batch size for model.predict
+
+    #     Returns:
+    #         the statistics and cross-entropy losses
+    #     """
+    #     losses, stat = [], []
+    #     data = x.to(self.device)
+    #     data_size = len(data)
+    #     num_sub_batches = self._get_number_of_sub_batches(data_size, self.args.train_batch_size)
+    #     for batch in range(num_sub_batches):
+    #         batch_start_index, batch_end_index = self._get_sub_batch_indices(batch, data_size, self.args.train_batch_size)
+    #         with torch.no_grad():
+    #             logits = model(data[batch_start_index: batch_end_index]).cpu().numpy()
+    #         prob = convert_logit_to_prob(logits)
+    #         losses.append(log_loss(y[batch_start_index: batch_end_index], prob, sample_weight=sample_weight))
+    #         stat.append(calculate_statistic(prob, y[batch_start_index: batch_end_index], sample_weight=sample_weight, is_logits=False))
+    #     return np.expand_dims(np.concatenate(stat), axis=1), np.expand_dims(np.concatenate(losses), axis=1)
+
+    # def _get_number_of_sub_batches(self, task_size, sub_batch_size):
+    #     num_batches = int(np.ceil(float(task_size) / float(sub_batch_size)))
+    #     if num_batches > 1 and (task_size % sub_batch_size == 1):
+    #         num_batches -= 1
+    #     return num_batches
+
+    # def _get_sub_batch_indices(self, index, task_size, sub_batch_size):
+    #     batch_start_index = index * sub_batch_size
+    #     batch_end_index = batch_start_index + sub_batch_size
+    #     if batch_end_index == (task_size - 1):  # avoid batch size of 1
+    #         batch_end_index = task_size
+    #     if batch_end_index > task_size:
+    #         batch_end_index = task_size
+    #     return batch_start_index, batch_end_index
 
 
 if __name__ == "__main__":

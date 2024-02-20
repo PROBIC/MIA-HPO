@@ -6,9 +6,6 @@ import numpy as np
 import os
 from lira import compute_score_lira
 import argparse
-from sklearn.metrics import confusion_matrix
-
-#NUM_TARGET_MODELS = 6
 
 def main():
     parser = argparse.ArgumentParser()
@@ -22,7 +19,7 @@ def main():
     parser.add_argument("--examples_per_class", type=int, default=None,
                             help="Examples per class when doing few-shot. -1 indicates to use the entire training set.")
     parser.add_argument("--target_epsilon", type=int,
-                            default=10, help="Maximum value of epsilon allowed.")
+                            default=-1, help="Maximum value of epsilon allowed.")
     parser.add_argument("--num_shadow_models", type=int,
                             default = 256, help="Number of shadow models used for LIRA")
     args = parser.parse_args()
@@ -62,16 +59,16 @@ def main():
 
         # Compute the scores and use them for MIA
         scores = compute_score_lira(stat_target, stat_in, stat_out, fix_variance=True)
-
+        if np.isnan(scores).any():
+            print(f"NaN found for scores of target #{idx+1} model")
         # y_score = np.concatenate((scores[in_indices_target], scores[~in_indices_target]))
         # y_true = np.concatenate((np.zeros(len(scores[in_indices_target])),
         #                                      np.ones(len(scores[~in_indices_target]))))
 
         # preserve the order of samples
-        y_score = scores
         y_true = [0 if mask else 1 for mask in in_indices_target]
 
-        all_scores.append(y_score)
+        all_scores.append(scores)
         all_y_true.append(y_true)
     
 
@@ -81,10 +78,10 @@ def main():
             'y_true': all_y_true,
             'scores': all_scores
             }
-    if not os.path.exists(os.path.join(args.results,'Seed={}'.format(args.seed))):
-        os.makedirs(os.path.join(args.results,'Seed={}'.format(args.seed)))
-    with open(os.path.join(args.results,'Seed={}'.format(args.seed),'scores_run_{}_exp_{}_config_{}_shots_{}_eps_{}.pkl'.format(args.run_id, args.exp_id, config, shot, epsilon)), "wb") as f:
-        pickle.dump(result, f)
+    with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 
+                           'experiment_{}'.format(args.exp_id), 
+                           'scores_{}_{}_{}.pkl'.format(config, shot, epsilon)), "wb") as f:
+        pickle.dump(result,f)
 
 if __name__ == '__main__':
     main()

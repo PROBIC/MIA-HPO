@@ -100,8 +100,6 @@ def train_test(train_images, train_labels, args, feature_dim, num_classes, test_
         eps, privacy_engine = fine_tune_batch(model=model, train_loader=train_loader, args=args)
         if validate:
             accuracy = (validate_linear(model=model, val_loader=val_loader)).cpu()
-        else:
-            accuracy = (test_linear(model=model, dataset_reader=test_set_reader,args=args)).cpu()
     else:
         print("Invalid classifier option.")
         sys.exit()
@@ -196,26 +194,6 @@ def fine_tune_batch(model, train_loader, args):
     else:
         return eps, None
 
-def test_linear(model, dataset_reader,args):
-    model.eval()
-    with torch.no_grad():
-        labels = []
-        predictions = []
-        test_set_size = dataset_reader.get_target_dataset_length()
-        num_batches = int(np.ceil(float(test_set_size) / float(args.test_batch_size)))
-        for _ in range(num_batches):
-            batch_images, batch_labels = dataset_reader.get_target_batch()
-            batch_images = batch_images.to(DEVICE)
-            batch_labels = batch_labels.type(torch.LongTensor).to(DEVICE)
-            logits = model(batch_images)
-            predictions.append(predict_by_max_logit(logits))
-            labels.append(batch_labels)
-            del logits
-        predictions = torch.hstack(predictions)
-        labels = torch.hstack(labels)
-        accuracy = compute_accuracy_from_predictions(predictions, labels)
-    return accuracy
-
 def validate_linear(model, val_loader):
     model.eval()
 
@@ -269,7 +247,7 @@ def optimize_hyperparameters(idx, args, train_images, train_labels, feature_dim,
     # hyperparameter optimization
     if args.sampler == "TPE":
         sampler = optuna.samplers.TPESampler(seed=seed)
-    elif args.sample == "BO":
+    elif args.sampler == "BO":
         sampler = optuna.integration.BoTorchSampler(seed=seed)
 
     study = optuna.create_study(study_name=f"dp_mia_{idx}", direction="maximize", sampler=sampler)
