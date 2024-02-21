@@ -38,10 +38,10 @@ def main():
         stat = pickle.load(f)
     if args.run_id % 2 == 0:
         # only load the TD-HPO indices 
-        with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id-1), 'tune_{}'.format(args.exp_id), 'stat_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
+        with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id-1), 'experiment_{}'.format(args.exp_id), 'tune_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
             tune_indices = pickle.load(f)
     else:
-        with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'tune_{}'.format(args.exp_id), 'stat_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
+        with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'experiment_{}'.format(args.exp_id), 'tune_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
             tune_indices = pickle.load(f)   
     # converting boolean index to numeric
     train_indices = np.arange(0,tune_indices.shape[0])
@@ -90,7 +90,8 @@ def main():
             'scores': all_scores
             }
 
-    with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'experiment_{}'.format(args.exp_id), 'scores_{}_{}_{}.pkl'.format(config, shot, epsilon)), "wb") as f:
+    with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'experiment_{}'.format(args.exp_id), 
+                           'scores_{}_{}_{}.pkl'.format(config, shot, epsilon)), "wb") as f:
         pickle.dump(result,f)
 
 if __name__ == '__main__':

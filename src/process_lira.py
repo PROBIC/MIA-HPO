@@ -44,6 +44,10 @@ def main():
         print(f'Target model is #{idx}')
         stat_target = stat[idx]  # statistics of target model, shape (n, k)
         in_indices_target = in_indices[idx]  # ground-truth membership, shape (n,)
+
+        # apply check for NaNs
+        if np.isnan(stat_target).any():
+            print(f"Stats of target #{idx+1} model contains NaNs")
         
         # `stat_shadow` contains statistics of the shadow models, with shape
         # (num_shadows, n, k). `in_indices_shadow` contains membership of the shadow
@@ -59,8 +63,6 @@ def main():
 
         # Compute the scores and use them for MIA
         scores = compute_score_lira(stat_target, stat_in, stat_out, fix_variance=True)
-        if np.isnan(scores).any():
-            print(f"NaN found for scores of target #{idx+1} model")
         # y_score = np.concatenate((scores[in_indices_target], scores[~in_indices_target]))
         # y_true = np.concatenate((np.zeros(len(scores[in_indices_target])),
         #                                      np.ones(len(scores[~in_indices_target]))))
