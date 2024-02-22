@@ -43,9 +43,10 @@ def main():
     else:
         with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'experiment_{}'.format(args.exp_id), 'tune_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
             tune_indices = pickle.load(f)   
-    # converting boolean index to numeric
-    train_indices = np.arange(0,tune_indices.shape[0])
-    hpo_indices = [train_indices[j] for j in range(len(train_indices)) if tune_indices[j] == True]
+    # no shuffling of training indices takes place while training shadow models, 
+    # index of training samples in tuning data = index of training samples in shadow model's data
+    train_indices_ordered = np.arange(0,tune_indices.shape[0])
+    hpo_indices = [train_indices_ordered[j] for j in range(len(train_indices_ordered)) if tune_indices[j] == True]
     curated_indices = []
     for idx in range(NUM_TARGET_MODELS):
         curated_indices.append(in_indices[idx][hpo_indices])
