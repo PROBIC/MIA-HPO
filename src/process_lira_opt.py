@@ -43,20 +43,22 @@ def main():
     else:
         with open(os.path.join(args.data_path, "Seed={}".format(args.seed), 'Run_{}'.format(args.run_id), 'experiment_{}'.format(args.exp_id), 'tune_{}_{}_{}.pkl'.format(config, shot, epsilon)), "rb") as f:
             tune_indices = pickle.load(f)   
-    # no shuffling of training indices takes place while training shadow models, 
-    # index of training samples in tuning data = index of training samples in shadow model's data
-    train_indices_ordered = np.arange(0,tune_indices.shape[0])
-    hpo_indices = [train_indices_ordered[j] for j in range(len(train_indices_ordered)) if tune_indices[j] == True]
-    curated_indices = []
+
+    # select only the indices + stats for samples used for tuning
+    curated_indices,curated_stat = [],[]
     for idx in range(NUM_TARGET_MODELS):
-        curated_indices.append(in_indices[idx][hpo_indices])
-    n = len(hpo_indices)
+        curr_indices = in_indices[idx]
+        curated_indices.append([curr_indices[i] for i in range(len(curr_indices)) if tune_indices[i] == True])
+        curr_stat = stat[idx]
+        curated_stat.append([curr_stat[i] for i in range(len(curr_stat)) if tune_indices[i] == True])
+    
+    n = np.sum(tune_indices)
     # Now we do MIA for each model
     all_scores = []
     all_y_true = []
     for idx in range(NUM_TARGET_MODELS):
         print(f'Target model is #{idx}')
-        stat_target = stat[idx][hpo_indices]  # statistics of target model, shape (n, k)
+        stat_target = curated_stat[idx]  # statistics of target model, shape (n, k)
         in_indices_target = curated_indices[idx]  # ground-truth membership, shape (n,)
         # `stat_shadow` contains statistics of the shadow models, with shape
         # (num_shadows, n, k). `in_indices_shadow` contains membership of the shadow
@@ -65,7 +67,7 @@ def main():
         # (m, k) array, for m being the number of shadow models trained with
         # (resp. without) the j-th example, and k being the number of augmentations
         # (1 in our case).
-        stat_shadow = np.array(stat[:idx] + stat[idx + 1:])
+        stat_shadow = np.array(curated_stat[:idx] + curated_stat[idx + 1:])
         in_indices_shadow = np.array(curated_indices[:idx] + curated_indices[idx + 1:])
         stat_in = [stat_shadow[:, j][in_indices_shadow[:, j]] for j in range(n)]
         stat_out = [stat_shadow[:, j][~in_indices_shadow[:, j]] for j in range(n)]
