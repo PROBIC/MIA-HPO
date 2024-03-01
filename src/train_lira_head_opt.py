@@ -51,7 +51,8 @@ class Learner:
         # for recording the best trials hypers
         self.optimal_args = {"learning_rate":[],
                              "max_grad_norm":[],
-                             "batch_size":[]}
+                             "batch_size":[],
+                             "best_trial":[]}
 
     """
     Command line parser
@@ -187,6 +188,7 @@ class Learner:
                                                        self.num_classes, self.args.seed)
                 self.optimal_args["learning_rate"].append(self.args.learning_rate)
                 self.optimal_args["batch_size"].append(self.args.train_batch_size)
+                self.optimal_args["best_trial"].append(self.args.best_trial)
                 if self.args.private:
                     self.optimal_args["max_grad_norm"].append(self.args.max_grad_norm)
 
@@ -208,6 +210,7 @@ class Learner:
                                                        self.args.seed)
                 self.optimal_args["learning_rate"].append(self.args.learning_rate)
                 self.optimal_args["batch_size"].append(self.args.train_batch_size)
+                self.optimal_args["best_trial"].append(self.args.best_trial)
                 if self.args.private:
                     self.optimal_args["max_grad_norm"].append(self.args.max_grad_norm)
 
@@ -374,7 +377,7 @@ class Learner:
         losses = []  # a list of losses for all models
         for idx in range(self.args.num_shadow_models + 1):
             # Generate a binary array indicating which example to include for training
-            np.random.seed(idx+1) # set the seed for drawing in-samples to the model index
+            np.random.seed(idx+1+self.args.seed) # set the seed for drawing in-samples to the model index + parent seed
             in_indices.append(np.random.binomial(1, 0.5, n).astype(bool))
 
             model_train_images = x[in_indices[-1]]
