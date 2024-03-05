@@ -48,9 +48,9 @@ def main():
     curated_indices,curated_stat = [],[]
     for idx in range(NUM_TARGET_MODELS):
         curr_indices = in_indices[idx]
-        curated_indices.append([curr_indices[i] for i in range(len(curr_indices)) if tune_indices[i] == True])
+        curated_indices.append(np.array([curr_indices[i] for i in range(len(curr_indices)) if tune_indices[i] == True]))
         curr_stat = stat[idx]
-        curated_stat.append([curr_stat[i] for i in range(len(curr_stat)) if tune_indices[i] == True])
+        curated_stat.append(np.expand_dims(np.concatenate([curr_stat[i] for i in range(len(curr_stat)) if tune_indices[i] == True]),1))
     
     n = np.sum(tune_indices)
     # Now we do MIA for each model
