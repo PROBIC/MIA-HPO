@@ -63,10 +63,6 @@ def main():
 
         # Compute the scores and use them for MIA
         scores = compute_score_lira(stat_target, stat_in, stat_out, fix_variance=True)
-        # y_score = np.concatenate((scores[in_indices_target], scores[~in_indices_target]))
-        # y_true = np.concatenate((np.zeros(len(scores[in_indices_target])),
-        #                                      np.ones(len(scores[~in_indices_target]))))
-
         # preserve the order of samples
         y_true = [0 if mask else 1 for mask in in_indices_target]
 
