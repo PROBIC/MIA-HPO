@@ -377,7 +377,7 @@ class Learner:
         losses = []  # a list of losses for all models
         for idx in range(self.args.num_shadow_models + 1):
             # Generate a binary array indicating which example to include for training
-            np.random.seed(idx+1+self.args.seed) # set the seed for drawing in-samples to the model index + parent seed
+            np.random.seed(idx + 1 + self.args.seed) # set the seed for drawing in-samples to the model index + parent seed
             in_indices.append(np.random.binomial(1, 0.5, n).astype(bool))
 
             model_train_images = x[in_indices[-1]]

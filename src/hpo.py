@@ -122,8 +122,8 @@ def fine_tune_batch(model, train_loader, args):
         privacy_engine = PrivacyEngine(accountant=args.accountant, 
                                         secure_mode=args.secure_rng)
 
-        seeded_noise_generator = torch.Generator(device=DEVICE)
-        seeded_noise_generator.manual_seed(args.seed)
+        # seeded_noise_generator = torch.Generator(device=DEVICE)
+        # seeded_noise_generator.manual_seed(args.seed)
 
         if args.accountant == "rdp": 
             model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
@@ -134,7 +134,7 @@ def fine_tune_batch(model, train_loader, args):
                     epochs=args.epochs,
                     target_delta=args.target_delta,
                     max_grad_norm=args.max_grad_norm,
-                    noise_generator=seeded_noise_generator if not args.secure_rng else None,
+                    # noise_generator=seeded_noise_generator if not args.secure_rng else None,
                     alphas=CUSTOM_ALPHAS)
         else: # No alpha term needed if no RDP accountant is being used
             model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
@@ -144,8 +144,8 @@ def fine_tune_batch(model, train_loader, args):
                     target_epsilon=args.target_epsilon,
                     epochs=args.epochs,
                     target_delta=args.target_delta,
-                    max_grad_norm=args.max_grad_norm,
-                    noise_generator=seeded_noise_generator if not args.secure_rng else None)
+                    max_grad_norm=args.max_grad_norm)
+                    # noise_generator=seeded_noise_generator if not args.secure_rng else None)
     if args.private:
         for _ in range(args.epochs):
             with BatchMemoryManager(
@@ -246,9 +246,9 @@ def objective_func(trial, train_features, train_labels, args, feature_dim:int, n
 def optimize_hyperparameters(idx, args, train_images, train_labels, feature_dim, num_classes, seed):
     # hyperparameter optimization
     if args.sampler == "TPE":
-        sampler = optuna.samplers.TPESampler(seed=seed)
+        sampler = optuna.samplers.TPESampler(seed=idx + 1 + seed)
     elif args.sampler == "BO":
-        sampler = optuna.integration.BoTorchSampler(seed=seed)
+        sampler = optuna.integration.BoTorchSampler(seed=idx + 1 + seed)
 
     study = optuna.create_study(study_name=f"dp_mia_{idx}", direction="maximize", sampler=sampler)
 
@@ -282,6 +282,7 @@ def optimize_hyperparameters(idx, args, train_images, train_labels, feature_dim,
         args.max_grad_norm = trial.params['max_grad_norm']
     args.train_batch_size = trial.params['batch_size']
     args.learning_rate = trial.params['learning_rate']
+    args.best_trial = trial.number
     # args.epochs = trial.params['epochs']
 
     return args, trial
