@@ -162,22 +162,6 @@ class Learner:
             train_features, train_labels,_, self.class_mapping = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
                                                                                                                         n_classes=self.num_classes,
                                                                                                                         task="train")
-            tune_features, tune_labels,tune_indices,_ = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
-                                                                                n_classes=self.num_classes,
-                                                                                task="tune")
-            
-            tune_data_splits = [] # record of tune splits
-            n = tune_features.shape[0]
-            for idx in range(0,self.args.num_shadow_models+1):
-                np.random.seed(idx + 1 + self.args.seed)
-                D_i = np.random.binomial(1, 0.5, n).astype(bool)
-                x_i, y_i = tune_features[D_i], tune_labels[D_i]
-                tune_data_splits.append(D_i)
-                opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
-                self.hypers["learning_rate"].append(opt_args_i.learning_rate)
-                self.hypers["batch_size"].append(opt_args_i.train_batch_size)
-                if opt_args_i.private:
-                    self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
 
             # load the hypers and training data splits
             hypers_file_path = os.path.join(self.directory, 'opt_args_{}_{}_{}.pkl'.format(
@@ -185,7 +169,24 @@ class Learner:
                 self.args.examples_per_class,
                 int(self.args.target_epsilon) if self.args.private else 'inf'))
             
-            if not os.path.isfile(hypers_file_path):                
+            if not os.path.isfile(hypers_file_path):
+                tune_features, tune_labels,tune_indices,_ = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
+                                                                                    n_classes=self.num_classes,
+                                                                                    task="tune")
+                
+                tune_data_splits = [] # record of tune splits
+                n = tune_features.shape[0]
+                for idx in range(0,self.args.num_shadow_models+1):
+                    np.random.seed(idx + 1 + self.args.seed)
+                    D_i = np.random.binomial(1, 0.5, n).astype(bool)
+                    x_i, y_i = tune_features[D_i], tune_labels[D_i]
+                    tune_data_splits.append(D_i)
+                    opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
+                    self.hypers["learning_rate"].append(opt_args_i.learning_rate)
+                    self.hypers["batch_size"].append(opt_args_i.train_batch_size)
+                    if opt_args_i.private:
+                        self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
+
                 with open(hypers_file_path, 'wb') as f:
                     pickle.dump(self.hypers,f)  
 
