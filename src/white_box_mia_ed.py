@@ -10,12 +10,12 @@ import argparse
 from dataset import dataset_map
 from utils import limit_tensorflow_memory_usage,\
     compute_accuracy_from_predictions, predict_by_max_logit, cross_entropy_loss, shuffle, set_seeds
-from cached_data_loader import CachedFeatureLoader
+from cached_data_loader_v2 import CachedFeatureLoader
 from datetime import datetime
 # import csv
 from opacus import PrivacyEngine
 from opacus.utils.batch_memory_manager import BatchMemoryManager
-# from hpo import optimize_hyperparameters
+from hpo import optimize_hyperparameters
 import gc
 import sys
 import warnings
@@ -42,6 +42,10 @@ class Learner:
         self.num_classes = None
         self.exp_dir = None
         self.run_dir = None
+        # for recording the best trials hypers
+        self.hypers = {"learning_rate":[],
+                             "max_grad_norm":[],
+                             "batch_size":[]}
     """
     Command line parser
     """
@@ -59,8 +63,8 @@ class Learner:
         parser.add_argument("--download_path_for_tensorflow_datasets", default=None,
                             help="Path to download the tensorflow datasets.")
         parser.add_argument("--results", help="Directory to load results from.")
-        parser.add_argument("--checkpoint_dir", "-c",
-                            help="Directory to load data and optimal hyperparameters from.")
+        # parser.add_argument("--checkpoint_dir", "-c",
+        #                     help="Directory to load data and optimal hyperparameters from.")
         parser.add_argument("--train_batch_size", "-b", type=int, default=200, help="Batch size.")
         parser.add_argument("--learning_rate", "-lr", type=float, default=0.003, help="Learning rate.")
         parser.add_argument("--epochs", "-e", type=int, default=40, help="Number of fine-tune epochs.")
@@ -75,6 +79,15 @@ class Learner:
                             help="Run ID for rerunning the whole experiment.")
         # HPO
         parser.add_argument("--number_of_trials", type=int, default=20, help="The number of trials for optuna")
+        parser.add_argument("--sampler", type=str, default="BO", help="Type of sample to be used for HPO.")
+        parser.add_argument("--train_batch_size_lb", type=int, default=10, help="LB of Batch size.")
+        parser.add_argument("--train_batch_size_ub", type=int, default=1000, help="UB of Batch size.")
+        parser.add_argument("--max_grad_norm_lb", type=float, default=0.2, help="LB of maximum gradient norm.")
+        parser.add_argument("--max_grad_norm_ub", type=float, default=10.0, help="UB of maximum gradient norm.")
+        parser.add_argument("--learning_rate_lb", type=float, default=1e-7, help="LB of learning rate")
+        parser.add_argument("--learning_rate_ub", type=float,  default=1e-2, help="UB of learning rate")
+        parser.add_argument("--type_of_tuning", type=int, default=0, 
+                            help="For TD-HPO set the variable to 0, for ED-HPO set it to 1.")
         # DP options
         parser.add_argument("--private", dest="private", default=False, action="store_true",
                             help="If true, use differential privacy.")
@@ -99,6 +112,8 @@ class Learner:
                             help="Starting index of hypers to train tfor the LiRA attack.")
         parser.add_argument("--stop_hypers", type=int, default=256,
                             help="Stopping index of hypers to train tfor the LiRA attack.")
+        parser.add_argument("--num_shadow_models", type=int, default=256,
+                            help="Total number of shadow models.")
         
         args = parser.parse_args()
         return args
@@ -147,19 +162,66 @@ class Learner:
             train_features, train_labels,_, self.class_mapping = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
                                                                                                                         n_classes=self.num_classes,
                                                                                                                         task="train")
-            # load the hypers and training data splits
-            with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'opt_args_{}_{}_{}.pkl'.format(
-                    self.args.learnable_params,
-                    self.args.examples_per_class,
-                    int(self.args.target_epsilon) if self.args.private else 'inf')), 'rb') as f:
-                self.hypers = pickle.load(f)
-
-            with open(os.path.join(self.args.checkpoint_dir, "Seed={}".format(self.args.seed), self.run_dir, self.exp_dir, 'in_indices_{}_{}_{}.pkl'.format(
-                    self.args.learnable_params,
-                    self.args.examples_per_class,
-                    int(self.args.target_epsilon) if self.args.private else 'inf')), 'rb') as f:
-                self.data_splits = pickle.load(f)
+            tune_features, tune_labels,tune_indices,_ = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
+                                                                                n_classes=self.num_classes,
+                                                                                task="tune")
             
+            tune_data_splits = [] # record of tune splits
+            n = tune_features.shape[0]
+            for idx in range(0,self.args.num_shadow_models+1):
+                np.random.seed(idx + 1 + self.args.seed)
+                D_i = np.random.binomial(1, 0.5, n).astype(bool)
+                x_i, y_i = tune_features[D_i], tune_labels[D_i]
+                tune_data_splits.append(D_i)
+                opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
+                self.hypers["learning_rate"].append(opt_args_i.learning_rate)
+                self.hypers["batch_size"].append(opt_args_i.train_batch_size)
+                if opt_args_i.private:
+                    self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
+
+            # load the hypers and training data splits
+            hypers_file_path = os.path.join(self.directory, 'opt_args_{}_{}_{}.pkl'.format(
+                self.args.learnable_params,
+                self.args.examples_per_class,
+                int(self.args.target_epsilon) if self.args.private else 'inf'))
+            
+            if not os.path.isfile(hypers_file_path):                
+                with open(hypers_file_path, 'wb') as f:
+                    pickle.dump(self.hypers,f)  
+
+                with open(os.path.join(self.directory, 'tune_indices_{}_{}_{}.pkl'.format(
+                        self.args.learnable_params,
+                        self.args.examples_per_class,
+                        int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
+                    pickle.dump(tune_indices,f) 
+
+                with open(os.path.join(self.directory, 'tune_splits_{}_{}_{}.pkl'.format(
+                        self.args.learnable_params,
+                        self.args.examples_per_class,
+                        int(self.args.target_epsilon) if self.args.private else 'inf')), 'wb') as f:
+                    pickle.dump(tune_data_splits,f)        
+
+            else:
+                with open(hypers_file_path, 'rb') as f:
+                    self.hypers = pickle.load(f)
+
+            data_file_path = os.path.join(self.directory,'in_indices_{}_{}_{}.pkl'.format(
+                    self.args.learnable_params,
+                    self.args.examples_per_class,
+                    int(self.args.target_epsilon) if self.args.private else 'inf'))
+            
+            if os.path.isfile(data_file_path):
+                with open(data_file_path, 'rb') as f:
+                    self.data_splits = pickle.load(f)
+            
+            else:
+                self.data_splits = []               
+                for idx in range(0,self.args.num_shadow_models + 1):
+                    np.random.seed(idx + 1 + self.args.seed)
+                    self.data_splits.append(np.random.binomial(1, 0.5, n).astype(bool))
+                
+                with open(data_file_path,"wb") as f:
+                    pickle.dump(self.data_splits,f)
 
             n = 2 * self.num_classes * self.args.examples_per_class
             self.model_stats = np.zeros(shape=(self.args.stop_data_split - self.args.start_data_split,

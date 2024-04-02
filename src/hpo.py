@@ -246,9 +246,9 @@ def objective_func(trial, train_features, train_labels, args, feature_dim:int, n
 def optimize_hyperparameters(idx, args, train_images, train_labels, feature_dim, num_classes, seed):
     # hyperparameter optimization
     if args.sampler == "TPE":
-        sampler = optuna.samplers.TPESampler(seed=idx + 1 + seed)
+        sampler = optuna.samplers.TPESampler(seed = idx + 1 + seed)
     elif args.sampler == "BO":
-        sampler = optuna.integration.BoTorchSampler(seed=idx + 1 + seed)
+        sampler = optuna.integration.BoTorchSampler(seed = idx + 1 + seed)
 
     study = optuna.create_study(study_name=f"dp_mia_{idx}", direction="maximize", sampler=sampler)
 
