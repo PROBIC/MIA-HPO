@@ -84,8 +84,10 @@ class Learner:
         parser.add_argument("--max_grad_norm_ub", type=float, default=10.0, help="UB of maximum gradient norm.")
         parser.add_argument("--learning_rate_lb", type=float, default=1e-7, help="LB of learning rate")
         parser.add_argument("--learning_rate_ub", type=float,  default=1e-2, help="UB of learning rate")
-        parser.add_argument("--tune_only", dest="tune_only", default=False, action="store_true",
+        parser.add_argument("--tune", dest="tune", default=False, action="store_true",
                                     help="If True, just compute the hypers and save them.")
+
+        parser.add_argument("--skip", dest="skip", default=0, type=int)
         # DP options
         parser.add_argument("--private", dest="private", default=False, action="store_true",
                             help="If true, use differential privacy.")
@@ -167,43 +169,65 @@ class Learner:
                 self.args.learnable_params,
                 self.args.examples_per_class,
                 int(self.args.target_epsilon) if self.args.private else 'inf'))
-            
-            if not os.path.isfile(hypers_file_path):
-                self.data_splits = [] # record of tune splits
-                n = train_features.shape[0]
-                for idx in range(0,self.args.num_shadow_models+1):
-                    np.random.seed(idx + 1 + self.args.seed)
-                    D_i = np.random.binomial(1, 0.5, n).astype(bool)
-                    x_i, y_i = train_features[D_i], train_labels[D_i]
-                    self.data_splits.append(D_i)
-                    opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
-                    self.hypers["learning_rate"].append(opt_args_i.learning_rate)
-                    self.hypers["batch_size"].append(opt_args_i.train_batch_size)
-                    if opt_args_i.private:
-                        self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
-
-                with open(hypers_file_path, 'wb') as f:
-                    pickle.dump(self.hypers,f)  
-
-      
-            else:
-                with open(hypers_file_path, 'rb') as f:
-                    self.hypers = pickle.load(f)
-
             data_file_path = os.path.join(self.directory,'in_indices_{}_{}_{}.pkl'.format(
                     self.args.learnable_params,
                     self.args.examples_per_class,
                     int(self.args.target_epsilon) if self.args.private else 'inf'))
             
-            if os.path.isfile(data_file_path):
+            if self.args.tune:
+                if self.args.skip == 0:
+                    if not os.path.isfile(hypers_file_path):
+                        self.data_splits = [] # record of tune splits
+                        n = train_features.shape[0]
+                        for idx in range(0,self.args.num_shadow_models+1):
+                            np.random.seed(idx + 1 + self.args.seed)
+                            D_i = np.random.binomial(1, 0.5, n).astype(bool)
+                            x_i, y_i = train_features[D_i], train_labels[D_i]
+                            self.data_splits.append(D_i)
+                            opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
+                            self.hypers["learning_rate"].append(opt_args_i.learning_rate)
+                            self.hypers["batch_size"].append(opt_args_i.train_batch_size)
+                            if opt_args_i.private:
+                                self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
+
+                        with open(hypers_file_path, 'wb') as f:
+                            pickle.dump(self.hypers,f)  
+
+                        with open(data_file_path,"wb") as f:
+                            pickle.dump(self.data_splits,f)  
+                else:
+                    with open(hypers_file_path, 'rb') as f:
+                        self.hypers = pickle.load(f)
+                    with open(data_file_path, 'rb') as f:
+                        self.data_splits = pickle.load(f)
+
+                    n = train_features.shape[0]
+                    for idx in range(0,self.args.num_shadow_models+1):
+                        if idx <= self.args.skip:
+                            continue
+                        else:
+                            np.random.seed(idx + 1 + self.args.seed)
+                            D_i = np.random.binomial(1, 0.5, n).astype(bool)
+                            x_i, y_i = train_features[D_i], train_labels[D_i]
+                            self.data_splits.append(D_i)
+                            opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
+                            self.hypers["learning_rate"].append(opt_args_i.learning_rate)
+                            self.hypers["batch_size"].append(opt_args_i.train_batch_size)
+                            if opt_args_i.private:
+                                self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
+
+                    with open(hypers_file_path, 'wb') as f:
+                        pickle.dump(self.hypers,f)  
+
+                    with open(data_file_path,"wb") as f:
+                        pickle.dump(self.data_splits,f)                                                        
+
+            else:
+                with open(hypers_file_path, 'rb') as f:
+                    self.hypers = pickle.load(f)
                 with open(data_file_path, 'rb') as f:
                     self.data_splits = pickle.load(f)
-            
-            else:                
-                with open(data_file_path,"wb") as f:
-                    pickle.dump(self.data_splits,f)
 
-            if self.args.tune_only == False:
                 # build the dict to store the stats
                 n = 2 * self.num_classes * self.args.examples_per_class
                 self.model_stats = np.zeros(shape=(self.args.stop_data_split - self.args.start_data_split,
