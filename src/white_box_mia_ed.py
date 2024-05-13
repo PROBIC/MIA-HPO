@@ -102,7 +102,7 @@ class Learner:
                             help="The nature of the accountant used for privacy engine.")
         
         # LiRA options
-        parser.add_argument("--save_models", type=bool, default=True,
+        parser.add_argument("--save_models", type=bool, default=False,
                                     help="If True, save the models trained for LiRA.")
     
         parser.add_argument("--start_data_split", type=int, default=0,
@@ -180,7 +180,7 @@ class Learner:
                 if self.args.skip == 0:
                     if not os.path.isfile(hypers_file_path):
                         self.data_splits = [] # record of tune splits
-                        n = train_features.shape[0]
+                        n = tune_features.shape[0]
                         for idx in range(0,self.args.num_shadow_models+1):
                             np.random.seed(idx + 1 + self.args.seed)
                             D_i = np.random.binomial(1, 0.5, n).astype(bool)
@@ -203,14 +203,14 @@ class Learner:
                     with open(data_file_path, 'rb') as f:
                         self.data_splits = pickle.load(f)
 
-                    n = train_features.shape[0]
+                    n = tune_features.shape[0]
                     for idx in range(0,self.args.num_shadow_models+1):
                         if idx <= self.args.skip:
                             continue
                         else:
                             np.random.seed(idx + 1 + self.args.seed)
                             D_i = np.random.binomial(1, 0.5, n).astype(bool)
-                            x_i, y_i = train_features[D_i], train_labels[D_i]
+                            x_i, y_i = tune_features[D_i], tune_labels[D_i]
                             self.data_splits.append(D_i)
                             opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
                             self.hypers["learning_rate"].append(opt_args_i.learning_rate)
@@ -268,25 +268,32 @@ class Learner:
                                                                                  self.args.max_physical_batch_size),
             shuffle=True) 
         
-        model_dir = os.path.join(self.directory,"lira_models")
-        if not os.path.exists(model_dir):
-            os.makedirs(model_dir)
-        filename = os.path.join(model_dir, 'model_{}_{}.pkl'.format(i+1, j+1))       
-        if os.path.isfile(filename) and os.path.getsize(filename) > 0:
-            with open(filename, 'rb') as f:
-                model = pickle.load(f)
+        if self.args.save_models:
+            model_dir = os.path.join(self.directory,"lira_models")
+            if not os.path.exists(model_dir):
+                os.makedirs(model_dir)
+            filename = os.path.join(model_dir, 'model_{}_{}.pkl'.format(i+1, j+1))       
+            if os.path.isfile(filename) and os.path.getsize(filename) > 0:
+                with open(filename, 'rb') as f:
+                    model = pickle.load(f)
+            else:
+                model = self.create_head(feature_dim=self.feature_dim, num_classes=num_classes)
+                if self.args.classifier == 'linear':
+                    self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)
+                    # save the newly trained model
+                    if self.args.save_models:
+                        with open(filename, 'wb') as f:
+                            pickle.dump(model, f)
+                else:
+                    print("Invalid classifier option.")
+                    sys.exit()
         else:
             model = self.create_head(feature_dim=self.feature_dim, num_classes=num_classes)
             if self.args.classifier == 'linear':
-                self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)
-                # save the newly trained model
-                if self.args.save_models:
-                    with open(filename, 'wb') as f:
-                        pickle.dump(model, f)
+                self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)            
             else:
                 print("Invalid classifier option.")
-                sys.exit()
-
+                sys.exit()                
         in_accuracy = self.validate_linear(model, train_loader)
         self.accuracies["in"][i][j - self.args.start_hypers] = in_accuracy 
         accuracy = (self.test_linear(model=model, dataset_reader=test_set_reader)).cpu()

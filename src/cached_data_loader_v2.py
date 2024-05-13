@@ -83,7 +83,6 @@ class CachedFeatureLoader:
                                                 replace=False)
                 ed_indices.extend(idx_selected) 
             selected_elements_list.extend(ed_indices) 
-
             all_selected_features = features[selected_elements_list,:]
             all_selected_labels = labels[selected_elements_list]
             # map labels to interval without gaps (e.g., 1, 2 instead of 20, 50)

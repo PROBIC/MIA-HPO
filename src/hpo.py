@@ -95,7 +95,6 @@ def train_test(train_images, train_labels, args, feature_dim, num_classes, test_
         model = DPDDP(model)
 
     model = model.to(DEVICE)
-
     if args.classifier == 'linear':
         eps, privacy_engine = fine_tune_batch(model=model, train_loader=train_loader, args=args)
         if validate:
@@ -251,24 +250,9 @@ def optimize_hyperparameters(idx, args, train_images, train_labels, feature_dim,
         sampler = optuna.integration.BoTorchSampler(seed = idx + 1 + seed)
 
     study = optuna.create_study(study_name=f"dp_mia_{idx}", direction="maximize", sampler=sampler)
+    study.optimize(lambda trial: objective_func(trial, train_images, train_labels,
+                args, feature_dim, num_classes), n_trials=args.number_of_trials)   
 
-    if args.type_of_tuning == 1:
-            context_size = args.examples_per_class * num_classes
-            tuning_batches = []
-            for i in range(0,context_size*args.number_of_trials,context_size):
-                curr_batch = (train_images[i:i+context_size,],train_labels[i:i+context_size])
-                tuning_batches.append(curr_batch)
-                
-            assert len(tuning_batches) == args.number_of_trials
-
-            for t in range(args.number_of_trials): 
-                print(f"Tuning using batch #{t+1}")
-                curr_tuning_features, curr_tuning_labels = tuning_batches[t]
-                study.optimize(lambda trial: objective_func(trial, curr_tuning_features, curr_tuning_labels,
-                   args, feature_dim, num_classes), n_trials=1)
-    else:    
-        study.optimize(lambda trial: objective_func(trial, train_images, train_labels,
-                    args, feature_dim, num_classes), n_trials=args.number_of_trials)
 
     print("Best trial:")
     trial = study.best_trial

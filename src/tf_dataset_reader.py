@@ -58,7 +58,7 @@ class TfDatasetReader:
             read_config=tfds.ReadConfig(shuffle_seed=tfds_seed)
         )
         if (self.examples_per_class is not None) and (dataset != "oxford_iiit_pet"):
-            ds_context, ds_tuning_context,ds_mia_context = self.sample_subset(
+            ds_train_context, ds_tuning_context = self.sample_subset(
                 ds_context,
                 ds_context_info.splits["train"].num_examples,
                 num_classes,
@@ -67,11 +67,10 @@ class TfDatasetReader:
             )  
             self.decoder = ds_context_info.features['image'].decode_example
     
-        self.context_iterator = ds_context.as_numpy_iterator()
+        self.training_iterator = ds_train_context.as_numpy_iterator()
         self.tuning_iterator = ds_tuning_context.as_numpy_iterator()
-        self.mia_context_iterator = ds_mia_context.as_numpy_iterator()
             
-        self.context_dataset_length = ds_context_info.splits["train"].num_examples
+        self.training_dataset_length = ds_context_info.splits["train"].num_examples
         if self.context_batch_size == -1:  # all
             self.context_batch_size = self.context_dataset_length
 
@@ -112,17 +111,14 @@ class TfDatasetReader:
             normalize
         ])
 
-    def get_context_batch(self):
-        return self._get_batch(self.context_iterator, is_target=False,is_mia = False)
+    def get_training_batch(self):
+        return self._get_batch(self.training_iterator, is_target=False)
 
     def get_tuning_batch(self):
-        return self._get_batch(self.tuning_iterator, is_target=False,is_mia = False,is_tuning=True)
-
-    def get_mia_context_batch(self):
-        return self._get_batch(self.mia_context_iterator, is_target=False,is_mia = True)
+        return self._get_batch(self.tuning_iterator, is_target=False)
 
     def get_target_batch(self):
-        return self._get_batch(self.target_iterator, is_target=True,is_mia=False)
+        return self._get_batch(self.target_iterator, is_target=True)
 
     def get_context_dataset_length(self):
         return self.context_dataset_length
@@ -130,16 +126,12 @@ class TfDatasetReader:
     def get_target_dataset_length(self):
         return self.target_dataset_length
 
-    def _get_batch(self, iterator, is_target=False,is_mia=False,is_tuning=False):
+    def _get_batch(self, iterator, is_target=False):
         
         if is_target:
             batch_size = self.target_batch_size 
-        elif is_mia:
-            batch_size = 2*self.context_batch_size
-        elif is_tuning:
-            batch_size = self.context_batch_size*self.optuna_trials
         else:
-            batch_size = self.context_batch_size
+            batch_size = 2 * self.context_batch_size
         images = []
         labels = []
         for i in range(batch_size):
@@ -276,80 +268,48 @@ class TfDatasetReader:
             
         _, class_counts = np.unique(data["label"], return_counts=True)
 
-        training_indices, mia_indices, tuning_indices = [],[],[]
+        mia_training_indices, ed_indices = [],[]
 
         for c in range(num_classes):
             idx_selected = np.random.choice(np.where(data["label"] == c)[0],
-                                        min(examples_per_class, class_counts[c]),
+                                        min(2*examples_per_class, class_counts[c]),
                                         replace=False)
-            if examples_per_class < class_counts[c]: # update the number of remainin samples
+            if 2 * examples_per_class < class_counts[c]: # update the number of remainin samples
                 class_counts[c] -= examples_per_class
-            training_indices.extend(idx_selected)
+            mia_training_indices.extend(idx_selected)
         
         # update the indices map --> remove training indices
         indices_map = {} 
         for c in range(num_classes):
             indices_map[c] = []
             for idx in np.where(data["label"] == c)[0]:  
-                if idx not in training_indices:
+                if idx not in mia_training_indices:
                     indices_map[c].append(idx)
             
         for c in range(num_classes):
-            idx_selected = np.random.choice(np.where(data["label"] == c)[0],
-                                        min(2*examples_per_class, class_counts[c]),
+            idx_selected = np.random.choice(indices_map[c],
+                                        min(2 * examples_per_class, class_counts[c]),
                                         replace=False)
-            if 2*examples_per_class < class_counts[c]: # update the number of remainin samples
-                class_counts[c] -= examples_per_class
-            mia_indices.extend(idx_selected)            
+            ed_indices.extend(idx_selected)            
         
-        # remaining indices --> remove mia indices, it already lacks training indices
-        for c in range(num_classes):
-            temp_mapping = []
-            for idx in indices_map[c]: 
-                if idx not in mia_indices:
-                    temp_mapping.append(idx)  
-            indices_map[c] = temp_mapping 
 
-        if num_classes == 10 or num_classes == 2:
-            replace_idxs=False
-        else:
-            replace_idxs=True
-            
-        for _ in range(self.optuna_trials):
-            for c in range(num_classes):
-                idx_selected = np.random.choice(indices_map[c],
-                                                examples_per_class,
-                                                replace=replace_idxs)
-                tuning_indices.extend(idx_selected)        
-            
-        training_data = {'image': data['image'][training_indices],
-                'label': data['label'][training_indices]}
+        training_data = {'image': data['image'][mia_training_indices],
+                'label': data['label'][mia_training_indices]}
         training_data = tf.data.Dataset.zip(
             (tf.data.Dataset.from_tensor_slices(training_data['image']),
             tf.data.Dataset.from_tensor_slices(training_data['label'])))
 
-        tuning_data = {'image': data['image'][tuning_indices],
-                'label': data['label'][tuning_indices]}
+        tuning_data = {'image': data['image'][ed_indices],
+                'label': data['label'][ed_indices]}
         tuning_data = tf.data.Dataset.zip(
             (tf.data.Dataset.from_tensor_slices(tuning_data['image']),
             tf.data.Dataset.from_tensor_slices(tuning_data['label'])))
-
-        mia_data = {'image': data['image'][mia_indices],
-                'label': data['label'][mia_indices]}
-        mia_data = tf.data.Dataset.zip(
-            (tf.data.Dataset.from_tensor_slices(mia_data['image']),
-            tf.data.Dataset.from_tensor_slices(mia_data['label'])))
         
-        print(num_classes, examples_per_class,self.optuna_trials)
-        print(len(training_indices))
-        print(len(tuning_indices))
-        print(len(mia_indices))
-        print("Common Indices in Training and Tuning Data = ".format(set(training_indices) & set(tuning_indices)))
-        print("Common Indices in Training and MIA Data = ".format(set(training_indices) & set(mia_indices)))
-        print("Common Indices in Tuning and MIA Data = ".format(set(mia_indices) & set(tuning_indices)))
+        print(len(mia_training_indices))
+        print(len(ed_indices))
+        print("Common Indices in Training and Tuning Data = ".format(set(mia_training_indices) & set(ed_indices)))
 
-        return training_data.map(lambda x, y: {'image': x, 'label': y}, tf.data.experimental.AUTOTUNE),\
-            tuning_data.map(lambda x, y: {'image': x, 'label': y}, tf.data.experimental.AUTOTUNE),\
-            mia_data.map(lambda x, y: {'image': x, 'label': y}, tf.data.experimental.AUTOTUNE)
+        return  training_data.map(lambda x, y: {'image': x, 'label': y}, tf.data.experimental.AUTOTUNE),\
+                tuning_data.map(lambda x, y: {'image': x, 'label': y}, tf.data.experimental.AUTOTUNE)
         
 
