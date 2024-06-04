@@ -10,11 +10,10 @@ import argparse
 from dataset import dataset_map
 from utils import limit_tensorflow_memory_usage,\
     compute_accuracy_from_predictions, predict_by_max_logit, cross_entropy_loss, shuffle, set_seeds
-from tf_dataset_reader import TfDatasetReader
+from cached_data_loader_v2 import CachedFeatureLoader
 from datetime import datetime
 # import csv
 from opacus import PrivacyEngine
-from model import DpFslLinear
 from opacus.utils.batch_memory_manager import BatchMemoryManager
 from hpo import optimize_hyperparameters
 import gc
@@ -120,6 +119,13 @@ class Learner:
         args = parser.parse_args()
         return args
 
+    def create_head(self,feature_dim: int, num_classes: int):
+        head = nn.Linear(feature_dim, num_classes)
+        head.weight.data.fill_(0.0)
+        head.bias.data.fill_(0.0)
+        head.to(DEVICE)
+        return head
+
     def run(self):
         # seeding
         set_seeds(self.args.seed)
@@ -146,24 +152,17 @@ class Learner:
 
             self.num_classes = dataset['num_classes']
 
-            self.dataset_reader =  TfDatasetReader(
-                    dataset=dataset['name'],
-                    task=dataset['task'],
-                    context_batch_size=self.args.examples_per_class * self.num_classes,
-                    target_batch_size=self.args.test_batch_size,
-                    path_to_datasets=self.args.download_path_for_tensorflow_datasets,
-                    num_classes=dataset['num_classes'],
-                    image_size=224 if 'vit' in self.args.feature_extractor else dataset['image_size'],
-                    examples_per_class=self.args.examples_per_class if self.args.examples_per_class != -1 else None,
-                    examples_per_class_seed=self.args.seed,
-                    tfds_seed=self.args.seed,
-                    device=self.device,
-                    osr=False
-                )
-
-            train_features, train_labels = self.dataset_reader.get_training_batch()
-            self.feature_dim = train_features.shape[1]
+            self.dataset_reader = CachedFeatureLoader(path_to_cache_dir=self.args.download_path_for_tensorflow_datasets,
+                                                      dataset=dataset["name"],
+                                                      feature_extractor = self.args.feature_extractor,
+                                                      random_seed=self.args.seed
+                                                      )
             
+            self.feature_dim = self.dataset_reader.obtain_feature_dim()
+            train_features, train_labels, self.class_mapping = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
+                                                                                                                        n_classes=self.num_classes,
+                                                                                                                        task="train")
+
             # load the hypers and training data splits
             hypers_file_path = os.path.join(self.directory, 'opt_args_{}_{}_{}.pkl'.format(
                 self.args.learnable_params,
@@ -275,11 +274,7 @@ class Learner:
                 with open(filename, 'rb') as f:
                     model = pickle.load(f)
             else:
-                model = DpFslLinear(
-                    feature_extractor_name=self.args.feature_extractor,
-                    num_classes=num_classes,
-                    learnable_params=self.args.learnable_params
-                )
+                model = self.create_head(feature_dim=self.feature_dim, num_classes=num_classes)
                 if self.args.classifier == 'linear':
                     self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)
                     # save the newly trained model
@@ -289,11 +284,7 @@ class Learner:
                     print("Invalid classifier option.")
                     sys.exit()
         else:
-            model = DpFslLinear(
-                    feature_extractor_name=self.args.feature_extractor,
-                    num_classes=num_classes,
-                    learnable_params=self.args.learnable_params
-                )
+            model = self.create_head(feature_dim=self.feature_dim, num_classes=num_classes)
             if self.args.classifier == 'linear':
                 self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)
             else:

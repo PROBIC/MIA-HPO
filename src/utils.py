@@ -194,19 +194,3 @@ def shuffle(images, labels):
     """
     permutation = np.random.permutation(images.shape[0])
     return images[permutation], labels[permutation]
-
-def get_git_revision_short_hash() -> str:
-    """
-    Returns current git hash
-    Returns
-    -------
-    str
-        short git hash
-    """
-    return subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
-
-def get_slurm_job_id() -> str:
-    """
-    Returns the slurm job id.
-    """
-    return os.environ.get("SLURM_JOB_ID", "")

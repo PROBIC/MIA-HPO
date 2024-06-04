@@ -10,10 +10,11 @@ import argparse
 from dataset import dataset_map
 from utils import limit_tensorflow_memory_usage,\
     compute_accuracy_from_predictions, predict_by_max_logit, cross_entropy_loss, shuffle, set_seeds
-from cached_data_loader_v2 import CachedFeatureLoader
+from tf_dataset_reader import TfDatasetReader
 from datetime import datetime
 # import csv
 from opacus import PrivacyEngine
+from model import DpFslLinear
 from opacus.utils.batch_memory_manager import BatchMemoryManager
 from hpo import optimize_hyperparameters
 import gc
@@ -86,8 +87,6 @@ class Learner:
         parser.add_argument("--learning_rate_ub", type=float,  default=1e-2, help="UB of learning rate")
         parser.add_argument("--tune", dest="tune", default=False, action="store_true",
                                     help="If True, just compute the hypers and save them.")
-
-        parser.add_argument("--skip", dest="skip", default=0, type=int)
         # DP options
         parser.add_argument("--private", dest="private", default=False, action="store_true",
                             help="If true, use differential privacy.")
@@ -119,13 +118,6 @@ class Learner:
         args = parser.parse_args()
         return args
 
-    def create_head(self,feature_dim: int, num_classes: int):
-        head = nn.Linear(feature_dim, num_classes)
-        head.weight.data.fill_(0.0)
-        head.bias.data.fill_(0.0)
-        head.to(DEVICE)
-        return head
-
     def run(self):
         # seeding
         set_seeds(self.args.seed)
@@ -152,21 +144,39 @@ class Learner:
 
             self.num_classes = dataset['num_classes']
 
-            self.dataset_reader = CachedFeatureLoader(path_to_cache_dir=self.args.download_path_for_tensorflow_datasets,
-                                                      dataset=dataset["name"],
-                                                      feature_extractor = self.args.feature_extractor,
-                                                      optuna_trials = self.args.number_of_trials,
-                                                      random_seed=self.args.seed
-                                                      )
+            self.dataset_reader =  TfDatasetReader(
+                    dataset=dataset['name'],
+                    task=dataset['task'],
+                    context_batch_size=self.args.examples_per_class * self.num_classes,
+                    target_batch_size=self.args.test_batch_size,
+                    path_to_datasets=self.args.download_path_for_tensorflow_datasets,
+                    num_classes=dataset['num_classes'],
+                    image_size=224 if 'vit' in self.args.feature_extractor else dataset['image_size'],
+                    examples_per_class=self.args.examples_per_class if self.args.examples_per_class != -1 else None,
+                    examples_per_class_seed=self.args.seed,
+                    tfds_seed=self.args.seed,
+                    device=self.device,
+                    osr=False
+                )
+
+            train_features, train_labels = self.dataset_reader.get_training_batch()
+            self.feature_dim = train_features.shape[-1]
+            print(f"Dimensions of the inputs images = {train_features.shape}")
+
+            tune_features, tune_labels = self.dataset_reader.get_tuning_batch()
+            print(f"Dimensions of the tuning images = {tune_features.shape}")
+
+            test_set_size = self.dataset_reader.get_target_dataset_length()
+            self.num_test_batches = int(np.ceil(float(test_set_size) / float(self.args.test_batch_size)))
+            self.test_data = {'images':[],'labels':[]}
+            for _ in range(self.num_test_batches):
+                batch_images, batch_labels = self.dataset_reader.get_target_batch()
+                batch_images = batch_images.to(self.device)
+                batch_labels = batch_labels.type(torch.LongTensor).to(self.device)
+                self.test_data["images"].append(batch_images)
+                self.test_data["labels"].append(batch_labels)
             
-            self.feature_dim = self.dataset_reader.obtain_feature_dim()
-            train_features, train_labels,_, self.class_mapping = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
-                                                                                                                        n_classes=self.num_classes,
-                                                                                                                        task="train")
-            tune_features, tune_labels,_, _ = self.dataset_reader.load_train_data(shots=self.args.examples_per_class, 
-                                                                                    n_classes=self.num_classes,
-                                                                                    task="tune")
-            # load the hypers and training data splits
+            # create the hypers and training data splits
             hypers_file_path = os.path.join(self.directory, 'opt_args_{}_{}_{}.pkl'.format(
                 self.args.learnable_params,
                 self.args.examples_per_class,
@@ -177,46 +187,26 @@ class Learner:
                     int(self.args.target_epsilon) if self.args.private else 'inf'))
             
             if self.args.tune:
-                if self.args.skip == 0:
-                    if not os.path.isfile(hypers_file_path):
-                        self.data_splits = [] # record of tune splits
-                        n = tune_features.shape[0]
-                        for idx in range(0,self.args.num_shadow_models+1):
-                            np.random.seed(idx + 1 + self.args.seed)
-                            D_i = np.random.binomial(1, 0.5, n).astype(bool)
-                            x_i, y_i = tune_features[D_i], tune_labels[D_i]
-                            self.data_splits.append(D_i)
-                            opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
-                            self.hypers["learning_rate"].append(opt_args_i.learning_rate)
-                            self.hypers["batch_size"].append(opt_args_i.train_batch_size)
-                            if opt_args_i.private:
-                                self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
-
-                        with open(hypers_file_path, 'wb') as f:
-                            pickle.dump(self.hypers,f)  
-
-                        with open(data_file_path,"wb") as f:
-                            pickle.dump(self.data_splits,f)  
-                else:
-                    with open(hypers_file_path, 'rb') as f:
-                        self.hypers = pickle.load(f)
-                    with open(data_file_path, 'rb') as f:
-                        self.data_splits = pickle.load(f)
-
-                    n = tune_features.shape[0]
-                    for idx in range(0,self.args.num_shadow_models+1):
-                        if idx <= self.args.skip:
-                            continue
-                        else:
-                            np.random.seed(idx + 1 + self.args.seed)
-                            D_i = np.random.binomial(1, 0.5, n).astype(bool)
-                            x_i, y_i = tune_features[D_i], tune_labels[D_i]
-                            self.data_splits.append(D_i)
-                            opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
-                            self.hypers["learning_rate"].append(opt_args_i.learning_rate)
-                            self.hypers["batch_size"].append(opt_args_i.train_batch_size)
-                            if opt_args_i.private:
-                                self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
+                self.data_splits = []
+                n = tune_features.shape[0]
+                assert self.args.start_data_split == self.args.start_hypers
+                assert self.args.stop_data_split == self.args.stop_hypers
+                for idx in range(0,self.args.num_shadow_models+1):
+                    if idx < self.args.start_hypers:
+                        continue
+                    elif idx == self.args.stop_hypers:
+                        break
+                    else:
+                        print(f"Tuning for index #{idx}")
+                        np.random.seed(idx + 1 + self.args.seed)
+                        D_i = np.random.binomial(1, 0.5, n).astype(bool)
+                        x_i, y_i = tune_features[D_i], tune_labels[D_i]
+                        self.data_splits.append(D_i)
+                        opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
+                        self.hypers["learning_rate"].append(opt_args_i.learning_rate)
+                        self.hypers["batch_size"].append(opt_args_i.train_batch_size)
+                        if opt_args_i.private:
+                            self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
 
                     with open(hypers_file_path, 'wb') as f:
                         pickle.dump(self.hypers,f)  
@@ -225,8 +215,10 @@ class Learner:
                         pickle.dump(self.data_splits,f)                                                        
 
             else:
+                # load the hypers and training data splits
                 with open(hypers_file_path, 'rb') as f:
                     self.hypers = pickle.load(f)
+
                 with open(data_file_path, 'rb') as f:
                     self.data_splits = pickle.load(f)
 
@@ -240,16 +232,14 @@ class Learner:
                 print("Shape of stats array =",self.model_stats.shape)
                 self.run_lira(
                     x=train_features,
-                    y=train_labels,
-                    test_dataset_reader=self.dataset_reader
-                )
+                    y=train_labels
+                    )
 
     def train_test(
             self,
             x,y,
             num_classes,
             array_coords =(0,0),
-            test_set_reader=None,
             sample_weight=None):
 
         self.start_time_final_run = datetime.now()
@@ -277,39 +267,49 @@ class Learner:
                 with open(filename, 'rb') as f:
                     model = pickle.load(f)
             else:
-                model = self.create_head(feature_dim=self.feature_dim, num_classes=num_classes)
+                model = DpFslLinear(
+                    feature_extractor_name=self.args.feature_extractor,
+                    num_classes=num_classes,
+                    learnable_params=self.args.learnable_params
+                    )
+                model = model.to(self.device)
                 if self.args.classifier == 'linear':
                     self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)
                     # save the newly trained model
-                    if self.args.save_models:
-                        with open(filename, 'wb') as f:
-                            pickle.dump(model, f)
+                    with open(filename, 'wb') as f:
+                        pickle.dump(model, f)
                 else:
                     print("Invalid classifier option.")
                     sys.exit()
         else:
-            model = self.create_head(feature_dim=self.feature_dim, num_classes=num_classes)
+            model = DpFslLinear(
+                    feature_extractor_name=self.args.feature_extractor,
+                    num_classes=num_classes,
+                    learnable_params=self.args.learnable_params
+                )
+            model = model.to(self.device)
             if self.args.classifier == 'linear':
-                self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)            
+                self.eps, self.delta = self.fine_tune_batch(model=model, train_loader=train_loader)
             else:
                 print("Invalid classifier option.")
-                sys.exit()                
+                sys.exit()        
+
         in_accuracy = self.validate_linear(model, train_loader)
-        self.accuracies["in"][i][j - self.args.start_hypers] = in_accuracy 
-        accuracy = (self.test_linear(model=model, dataset_reader=test_set_reader)).cpu()
-        self.accuracies["test"][i][j - self.args.start_hypers] = accuracy
+        self.accuracies["in"][i - self.args.start_data_split][j - self.args.start_hypers] = in_accuracy 
+        accuracy = (self.test_linear(model=model)).cpu()
+        self.accuracies["test"][i - self.args.start_data_split][j - self.args.start_hypers] = accuracy
         out_dataloader = DataLoader(
                         TensorDataset(out_train_features,out_train_labels),
                         batch_size= self.args.train_batch_size if self.args.private else min(self.args.train_batch_size, self.args.max_physical_batch_size),
                         shuffle=True) 
         
         out_accuracy = self.validate_linear(model, out_dataloader)
-        self.accuracies["out"][i][j - self.args.start_hypers] = out_accuracy
-        print(f'M[{i,j}] with {self.data_splits[i].sum()} examples. Test Accuracy = {accuracy}. Epsilon = {self.eps}')
+        self.accuracies["out"][i - self.args.start_data_split][j - self.args.start_hypers] = out_accuracy
+        print(f'M[{i,j}] with {self.data_splits[i - self.args.start_data_split].sum()} examples. Test Accuracy = {accuracy}. Epsilon = {self.eps}')
         
         # store the stats associated with model[i][j] 
         stats,_ = self.get_stat_and_loss_aug(model, x, y.numpy(), sample_weight)
-        self.model_stats[i][j - self.args.start_hypers] = stats 
+        self.model_stats[i - self.args.start_data_split][j - self.args.start_hypers] = stats 
         del model
         gc.collect()
         torch.cuda.empty_cache()
@@ -391,23 +391,15 @@ class Learner:
             accuracy = compute_accuracy_from_predictions(predictions, labels)
         return accuracy
 
-    def test_linear(self, model, dataset_reader):
+    def test_linear(self, model):
         model.eval()
-
         with torch.no_grad():
             labels = []
             predictions = []
-            test_features,test_labels = dataset_reader.load_test_data(class_mapping=self.class_mapping)
-            test_loader = DataLoader(
-                    TensorDataset(test_features, test_labels),
-                    batch_size= self.args.test_batch_size,
-                    shuffle=True)                
-            for batch_images, batch_labels in test_loader:
-                batch_images = batch_images.to(self.device)
-                batch_labels = batch_labels.type(torch.LongTensor).to(self.device)
-                logits = model(batch_images)
+            for i in range(self.num_test_batches):
+                logits = model(self.test_data["images"][i])
                 predictions.append(predict_by_max_logit(logits))
-                labels.append(batch_labels)
+                labels.append(self.test_data["labels"][i])
                 del logits
                 torch.cuda.empty_cache()
             predictions = torch.hstack(predictions)
@@ -415,7 +407,7 @@ class Learner:
             accuracy = compute_accuracy_from_predictions(predictions, labels)
         return accuracy
 
-    def run_lira(self, x, y, test_dataset_reader):
+    def run_lira(self, x, y):
         # Sample weights are set to `None` by default, but can be changed here.
         sample_weight = None
         for i in range(self.args.start_data_split, self.args.stop_data_split): # dataset loop
@@ -423,7 +415,6 @@ class Learner:
                 self.train_test(x,y,
                                 self.num_classes,
                                 array_coords=(i,j),
-                                test_set_reader=test_dataset_reader,
                                 sample_weight=sample_weight)
 
         # save stat, and train/test accuracies

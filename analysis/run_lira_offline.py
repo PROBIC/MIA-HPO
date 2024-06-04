@@ -17,17 +17,9 @@ class Learner:
         self.args = self.parse_command_line()
         self.scores = {"CMIA":None,
                        "WBMIA": None,
-                       "MIA-KL":None,
-                       "MIA-H":None,
-                       "MIA-J":None}
-                    #    "MIA-MD":None,
-                    #    "MIA-NMD":None}
+                       "MIA-KL":None}
         self.opt_args = {
-                       "MIA-KL":None,
-                       "MIA-H":None,
-                       "MIA-J":None}
-                    #    "MIA-MD":None,
-                    #    "MIA-NMD":None}
+                       "MIA-KL":None}
 
     """
     Command line parser
@@ -90,33 +82,18 @@ class Learner:
                 self.args.examples_per_class,
                 self.target_epsilon)), 'rb') as f:
             in_indices = pickle.load(f)
+            in_indices = in_indices[:self.args.num_models] 
 
         # Complete TD
-        self.scores["CMIA"] = run_complete_mia(stats, in_indices,use_global_variance = False)
+        self.scores["CMIA"] = run_hpo_acc_mia(stats, in_indices,use_global_variance = False)
         # WB-MIA
         self.scores["WBMIA"] = run_white_box_mia(stats,in_indices,use_global_variance=False)
         # MIA-KL
         opt_hypers_per_model_min = find_optimal_hypers(stats,in_indices,metric="KL")   
         self.opt_args["MIA-KL"] = opt_hypers_per_model_min
-        self.scores["MIA-KL"] = run_white_box_mia_sim(stats,in_indices,opt_hypers_per_model_min)
-        # MIA-J
-        opt_hypers_per_model_min = find_optimal_hypers(stats,in_indices,metric="jeffreys")   
-        self.opt_args["MIA-J"] = opt_hypers_per_model_min
-        self.scores["MIA-J"] = run_white_box_mia_sim(stats,in_indices,opt_hypers_per_model_min)
-        # MIA-H
-        opt_hypers_per_model_min = find_optimal_hypers(stats,in_indices,metric="hellinger")  
-        self.opt_args["MIA-H"] = opt_hypers_per_model_min
-        self.scores["MIA-H"] = run_white_box_mia_sim(stats,in_indices,opt_hypers_per_model_min)
-        # # MIA-NMD
-        # opt_hypers_per_model_min = find_optimal_hypers(stats,in_indices,metric="carlini")   
-        # self.opt_args["MIA-NMD"] = opt_hypers_per_model_min
-        # self.scores["MIA-NMD"] = run_white_box_mia_sim(stats,in_indices,opt_hypers_per_model_min)
-        # # MIA-MD
-        # opt_hypers_per_model_min = find_optimal_hypers(stats,in_indices,metric="mean") 
-        # self.opt_args["MIA-MD"] = opt_hypers_per_model_min  
-        # self.scores["MIA-MD"] = run_white_box_mia_sim(stats,in_indices,opt_hypers_per_model_min)
+        self.scores["MIA-KL"] = run_hpo_kl_mia(stats,in_indices,opt_hypers_per_model_min)
 
-        filename = os.path.join(self.stats_dir, 'scores_{}_{}_{}.pkl'.format(
+        filename = os.path.join(self.stats_dir, 'scores_{}_{}_{}_offline.pkl'.format(
         self.args.learnable_params,
         self.args.examples_per_class,
         self.target_epsilon))
@@ -124,16 +101,16 @@ class Learner:
         with open(filename, 'wb') as f:
             pickle.dump(self.scores, f)   
 
-        filename = os.path.join(self.stats_dir, 'opt_shadow_hypers_{}_{}_{}.pkl'.format(
-        self.args.learnable_params,
-        self.args.examples_per_class,
-        self.target_epsilon))
+        # filename = os.path.join(self.stats_dir, 'opt_shadow_hypers_{}_{}_{}.pkl'.format(
+        # self.args.learnable_params,
+        # self.args.examples_per_class,
+        # self.target_epsilon))
             
-        with open(filename, 'wb') as f:
-            pickle.dump(self.opt_args, f)       
+        # with open(filename, 'wb') as f:
+        #     pickle.dump(self.opt_args, f)       
         
         
-def run_complete_mia(stat, in_indices, use_global_variance=False):
+def run_hpo_acc_mia(stat, in_indices, use_global_variance=False):
     N = stat.shape[0]
     cmia_stat = []
     for i in range(N):
@@ -154,7 +131,7 @@ def run_complete_mia(stat, in_indices, use_global_variance=False):
         stat_out = [stat_shadow[:, j][~in_indices_shadow[:, j]] for j in range(n)]
 
         # Compute the scores and use them for MIA
-        scores = compute_score_lira(stat_target, stat_in, stat_out,fix_variance=use_global_variance)
+        scores = compute_score_lira(stat_target, stat_in, stat_out,fix_variance=use_global_variance,option="out")
         # preserve the order of samples
         y_true = [0 if mask else 1 for mask in in_indices_target]
 
@@ -169,7 +146,7 @@ def compute_score(target_stats, shadow_stats, target_in_indices, shadow_in_indic
     stat_in = [shadow_stats[:, j][shadow_in_indices[:, j]] for j in range(n)]
     stat_out =  [shadow_stats[:, j][~shadow_in_indices[:, j]] for j in range(n)]
     # Compute the scores and use them for MIA
-    scores = compute_score_lira(target_stats, stat_in, stat_out,fix_variance=use_global_variance)
+    scores = compute_score_lira(target_stats, stat_in, stat_out,fix_variance=use_global_variance,option="out")
     # preserve the order of samples
     y_true = [0 if mask else 1 for mask in target_in_indices]
     return y_true, scores
@@ -198,9 +175,6 @@ def hellinger_normal(P,Q):
     base = np.sqrt((2*s_p*s_q)/(s_p**2 + s_q**2))
     return np.sqrt(1 - base**exp)
 
-def carlini_version(P,Q):
-    return np.abs(np.mean(P) - np.mean(Q))/ (np.std(P) + np.std(Q))
-
 def mean_difference(P,Q):
     return np.abs(np.mean(P) - np.mean(Q))
 
@@ -221,7 +195,7 @@ def find_optimal_hypers(stats, in_indices,metric = "KL"):
     N_MODELS = stats.shape[0]
     opt_hypers_per_model = np.zeros((N_MODELS,))
     for i in range(N_MODELS):
-        print(f"Currently targetting model #{i+1}")
+        print(f"Finding optimal HPs for model #{i+1}")
         stats_target = stats[i,i,:,:].flatten()
         stats_shadow = np.hstack([stats[:,:i,:,:],stats[:,i+1:,:,:]]) # select all columns but the target hypers
         shadow_indices = np.vstack([in_indices[:i,:],in_indices[i+1:,:]])
@@ -233,8 +207,6 @@ def find_optimal_hypers(stats, in_indices,metric = "KL"):
             for k in range(curr_shadow_column.shape[0]):
                 if metric == "hellinger":
                     overlaps[k] = hellinger_normal(stats_target[shadow_indices[k]],curr_shadow_column[k,shadow_indices[k],:])
-                elif metric == "carlini":
-                    overlaps[k] = carlini_version(stats_target[shadow_indices[k]],curr_shadow_column[k,shadow_indices[k],:])
                 elif metric == "KL":
                     overlaps[k] = kl_divergence(stats_target[shadow_indices[k]],curr_shadow_column[k,shadow_indices[k],:],direction="forward")
                 elif metric == "jeffreys":
@@ -248,7 +220,7 @@ def find_optimal_hypers(stats, in_indices,metric = "KL"):
 
     return opt_hypers_per_model        
 
-def run_white_box_mia_sim(stats,indices,opt_hypers_per_model,use_global_variance=False):
+def run_hpo_kl_mia(stats,indices,opt_hypers_per_model,use_global_variance=False):
     in_indices = np.array(indices)
     all_y_true, all_y_score = [],[]
     N_MODELS = stats.shape[0]

@@ -8,12 +8,10 @@ class CachedFeatureLoader:
                  path_to_cache_dir: str, 
                 dataset: str = "cifar10", 
                 feature_extractor: str = "BiT-M-R50x1",
-                optuna_trials:int=1,
                 random_seed: int = 0):
         self.dataset = dataset
         self.path_to_cache_dir = path_to_cache_dir
         self.feature_extractor = feature_extractor
-        self.optuna_trials = optuna_trials
         self.random_seed = random_seed
 
     def _load_complete_data_from_disk(self, train: True):
@@ -118,10 +116,10 @@ class CachedFeatureLoader:
         all_train_features, all_train_labels = self._load_complete_data_from_disk(train=True)
 
         selected_classes = self._subsample_classes(all_train_labels, n_classes, sampling_method="random")
-        train_features, train_labels, data_indices, class_mapping = self._subsample_shots(
+        train_features, train_labels, _, class_mapping = self._subsample_shots(
             all_train_features, all_train_labels, selected_classes, shots, task=task)
 
-        return train_features, train_labels, data_indices, class_mapping
+        return train_features, train_labels, class_mapping
     
     def load_test_data(self, class_mapping=None):
         """

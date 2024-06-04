@@ -8,12 +8,10 @@ class CachedFeatureLoader:
                  path_to_cache_dir: str, 
                 dataset: str = "cifar10", 
                 feature_extractor: str = "BiT-M-R50x1",
-                optuna_trials:int=1,
                 random_seed: int = 0):
         self.dataset = dataset
         self.path_to_cache_dir = path_to_cache_dir
         self.feature_extractor = feature_extractor
-        self.optuna_trials = optuna_trials
         self.random_seed = random_seed
 
     def _load_complete_data_from_disk(self, train: True):
@@ -76,15 +74,13 @@ class CachedFeatureLoader:
                     if idx not in mia_training_indices:
                         indices_map[c].append(idx)
 
-            tuning_indices = []
-            for _ in range(self.optuna_trials):
-                for c in classes:
-                    idx_selected = np.random.choice(indices_map[c],
-                                                    shots,
-                                                    replace=True)
-                    tuning_indices.extend(idx_selected) 
-            selected_elements_list.extend(tuning_indices) 
-
+            ed_indices = []
+            for c in classes:
+                idx_selected = np.random.choice(indices_map[c],
+                                                min(2*shots, class_counts[c]),
+                                                replace=False)
+                ed_indices.extend(idx_selected) 
+            selected_elements_list.extend(ed_indices) 
             all_selected_features = features[selected_elements_list,:]
             all_selected_labels = labels[selected_elements_list]
             # map labels to interval without gaps (e.g., 1, 2 instead of 20, 50)
@@ -94,15 +90,15 @@ class CachedFeatureLoader:
                 original_class_name = str(c.item())
                 class_mapping[original_class_name] = c_i
 
-            print("Common indices between Training and Tuning data:={}".format(set(mia_training_indices).intersection(set(tuning_indices))))  
+            print("Common indices between Training and Tuning data:={}".format(set(mia_training_indices).intersection(set(ed_indices))))  
 
             print("Train set size = {}".format(len(mia_training_indices)))
-            print("Tuning set size = {}".format(len(tuning_indices)))
+            print("Tuning set size = {}".format(len(ed_indices)))
 
             if task == "train":
                 return all_selected_features[:len(mia_training_indices),:], all_selected_labels[:len(mia_training_indices)], mia_training_indices, class_mapping
             elif task == "tune":
-                return all_selected_features[len(mia_training_indices):,:], all_selected_labels[len(mia_training_indices):], tuning_indices, class_mapping
+                return all_selected_features[len(mia_training_indices):,:], all_selected_labels[len(mia_training_indices):], ed_indices, class_mapping
             else:
                 raise ValueError("Not a legitimate task!")
 
@@ -120,10 +116,10 @@ class CachedFeatureLoader:
         all_train_features, all_train_labels = self._load_complete_data_from_disk(train=True)
 
         selected_classes = self._subsample_classes(all_train_labels, n_classes, sampling_method="random")
-        train_features, train_labels, data_indices, class_mapping = self._subsample_shots(
+        train_features, train_labels, _, class_mapping = self._subsample_shots(
             all_train_features, all_train_labels, selected_classes, shots, task=task)
 
-        return train_features, train_labels, data_indices, class_mapping
+        return train_features, train_labels, class_mapping
     
     def load_test_data(self, class_mapping=None):
         """
