@@ -58,7 +58,7 @@ class CachedFeatureLoader:
             mia_training_indices = []
             for c in classes:
                 idx_selected = np.random.choice(np.where(labels == c)[0],
-                                            min(2*shots, class_counts[c]),
+                                            min(2 * shots, class_counts[c]),
                                             replace=False
                                             )
                 if shots < class_counts[c]:
@@ -77,7 +77,7 @@ class CachedFeatureLoader:
             ed_indices = []
             for c in classes:
                 idx_selected = np.random.choice(indices_map[c],
-                                                min(2*shots, class_counts[c]),
+                                                min(2 * shots, class_counts[c]),
                                                 replace=False)
                 ed_indices.extend(idx_selected) 
             selected_elements_list.extend(ed_indices) 

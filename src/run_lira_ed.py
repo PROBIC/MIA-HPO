@@ -7,6 +7,12 @@ from lira import compute_score_lira
 from sklearn.metrics import roc_curve
 import warnings 
 
+def get_runs(shots):
+    if shots == 100:
+        return 1,2
+    else:
+        return 3,4
+
 def main():
     learner = Learner()
     learner.run()
@@ -27,14 +33,12 @@ class Learner:
     def parse_command_line(self):
         parser = argparse.ArgumentParser()
 
-        parser.add_argument("--stats_dir", help="Directory to load stats from.")
+        parser.add_argument("--result_dir", help="Directory to load shadow stats from.")
         parser.add_argument("--indices_dir", "-c",
                             help="Directory to load in_indices from.")
         parser.add_argument("--seed", type=int, default=0, help="Seed for datasets, trainloader and opacus")
         parser.add_argument("--exp_id", type=int, default=None,
                             help="Experiment ID.")
-        parser.add_argument("--run_id", type=int, default=None,
-                            help="Run ID for rerunning the whole experiment.")
         parser.add_argument("--examples_per_class", type=int, default=None,
                             help="Examples per class when doing few-shot. -1 indicates to use the entire training set.")
         parser.add_argument("--learnable_params", choices=['none', 'film'], default='none',
@@ -49,9 +53,12 @@ class Learner:
         
         # ensure the directory to hold results exists
         self.exp_dir = f"experiment_{self.args.exp_id}"
-        self.run_dir = f"Run_{self.args.run_id}"
-        self.stats_dir = os.path.join(self.args.stats_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
-        self.indices_dir = os.path.join(self.args.indices_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
+        td_run_id, ed_run_id = get_runs(self.args.examples_per_class)
+        self.td_run_dir = f"Run_{td_run_id}"
+        self.ed_run_dir = f"Run_{ed_run_id}"
+        self.target_stats_dir = os.path.join(self.args.result_dir, "Seed={}".format(self.args.seed),self.ed_run_dir, self.exp_dir)
+        self.shadow_stats_dir = os.path.join(self.args.result_dir, "Seed={}".format(self.args.seed),self.td_run_dir, self.exp_dir)
+        self.indices_dir = os.path.join(self.args.indices_dir, "Seed={}".format(self.args.seed),self.ed_run_dir, self.exp_dir)
 
         if self.args.exp_id == 1:
             self.target_epsilon = "inf"
@@ -65,16 +72,20 @@ class Learner:
             print("Invalid experiment option.")
             sys.exit()
 
-
-        # load the training data splits and stats
-        filename = os.path.join(self.stats_dir, 'stat_{}_{}_{}_r_0_to_{}.pkl'.format(
+        # load the training data splits and stats        
+        with open(os.path.join(self.target_stats_dir, 'stat_{}_{}_{}_r_0_to_{}.pkl'.format(
                 self.args.learnable_params,
                 self.args.examples_per_class,
                 self.target_epsilon,
-                self.args.num_models))
-        
-        with open(filename, 'rb') as f:
-            stats = pickle.load(f)
+                self.args.num_models)), 'rb') as f:
+            target_stats = pickle.load(f)
+
+        with open(os.path.join(self.shadow_stats_dir, 'stat_{}_{}_{}_r_0_to_{}.pkl'.format(
+                self.args.learnable_params,
+                self.args.examples_per_class,
+                self.target_epsilon,
+                self.args.num_models)), 'rb') as f:
+            shadow_stats = pickle.load(f)
 
         with open(os.path.join(self.indices_dir, 'in_indices_{}_{}_{}.pkl'.format(
                 self.args.learnable_params,
@@ -83,39 +94,30 @@ class Learner:
             in_indices = pickle.load(f)
             in_indices = in_indices[:self.args.num_models] 
 
-        # Complete TD
-        self.scores["CMIA"] = run_hpo_acc_mia(stats, in_indices,use_global_variance = False)
-        # # WB-MIA
-        # self.scores["WBMIA"] = run_white_box_mia(stats,in_indices,use_global_variance=False)
-        # MIA-KL
-        opt_hypers_per_model_min = find_optimal_hypers(stats,in_indices,metric="KL")   
+        # ACC-LiRA
+        self.scores["CMIA"] = run_acc_lira(target_stats, in_indices,use_global_variance = False)
+        # KL-LiRA
+        opt_hypers_per_model_min = find_optimal_hypers(target_stats,shadow_stats,in_indices,metric="KL")   
         self.opt_args["MIA-KL"] = opt_hypers_per_model_min
-        self.scores["MIA-KL"] = run_hpo_kl_mia(stats,in_indices,opt_hypers_per_model_min)
-
-        filename = os.path.join(self.stats_dir, 'scores_{}_{}_{}.pkl'.format(
-        self.args.learnable_params,
-        self.args.examples_per_class,
-        self.target_epsilon))
-            
-        with open(filename, 'wb') as f:
+        self.scores["MIA-KL"] = run_kl_lira(target_stats,shadow_stats,in_indices,opt_hypers_per_model_min)
+       
+        with open(os.path.join(self.target_stats_dir, 'scores_{}_{}_{}.pkl'.format(
+                self.args.learnable_params,
+                self.args.examples_per_class,
+                self.target_epsilon)), 'wb') as f:
             pickle.dump(self.scores, f)   
 
-        filename = os.path.join(self.stats_dir, 'opt_shadow_hypers_{}_{}_{}.pkl'.format(
-        self.args.learnable_params,
-        self.args.examples_per_class,
-        self.target_epsilon))
-            
-        with open(filename, 'wb') as f:
+        with open(os.path.join(self.target_stats_dir, 'opt_shadow_hypers_{}_{}_{}.pkl'.format(
+                self.args.learnable_params,
+                self.args.examples_per_class,
+                self.target_epsilon)), 'wb') as f:
             pickle.dump(self.opt_args, f)       
         
         
-def run_hpo_acc_mia(stat, in_indices, use_global_variance=False):
-    N = stat.shape[0]
-    cmia_stat = []
-    for i in range(N):
-        cmia_stat.append(stat[i,i,:,:])
-
+def run_acc_lira(cmia_stat, in_indices, use_global_variance=False):
+    N = cmia_stat.shape[0]
     n = len(cmia_stat[0])
+    print(N,n)
     # Now we do MIA for each model
     all_scores = []
     all_y_true = []
@@ -124,7 +126,7 @@ def run_hpo_acc_mia(stat, in_indices, use_global_variance=False):
         stat_target = cmia_stat[idx]  # statistics of target model, shape (n, k)
         in_indices_target = in_indices[idx]  # ground-truth membership, shape (n,)
 
-        stat_shadow = np.array(cmia_stat[:idx] + cmia_stat[idx + 1:])
+        stat_shadow = np.vstack([cmia_stat[:idx],cmia_stat[idx + 1:]])
         in_indices_shadow = np.array(in_indices[:idx] + in_indices[idx + 1:])
         stat_in = [stat_shadow[:, j][in_indices_shadow[:, j]] for j in range(n)]
         stat_out = [stat_shadow[:, j][~in_indices_shadow[:, j]] for j in range(n)]
@@ -139,6 +141,8 @@ def run_hpo_acc_mia(stat, in_indices, use_global_variance=False):
     
     return {"y_true": np.hstack(all_y_true),
            "y_score": np.hstack(all_scores)}
+  
+
 
 def compute_score(target_stats, shadow_stats, target_in_indices, shadow_in_indices,use_global_variance=False):
     n = len(target_stats)
@@ -151,34 +155,20 @@ def compute_score(target_stats, shadow_stats, target_in_indices, shadow_in_indic
     return y_true, scores
 
 
-# def run_white_box_mia(stats,indices,use_global_variance=False):
-#     in_indices = np.array(indices)
-#     all_y_true, all_y_score = [],[]
-#     N_MODELS = stats.shape[0]
-#     for i in range(N_MODELS): 
-#         print(f"Target model M[{i}][{i}]")
-#         curr_stats = stats[:,i,:,:]
-#         target = curr_stats[i,:,:]
-#         shadow = np.vstack([curr_stats[:i,:,:], curr_stats[i+1:,:,:]])
-#         target_in = in_indices[i,:]
-#         shadow_in = np.vstack([in_indices[:i,:], in_indices[i+1:,:]])
-#         curr_y_true, curr_y_score = compute_score(target, shadow, target_in, 
-#                                                   shadow_in,use_global_variance=use_global_variance)
-#         all_y_true.append(curr_y_true)
-#         all_y_score.append(curr_y_score)
-#     return {"y_true": np.hstack(all_y_true), "y_score": np.hstack(all_y_score)}
-
 def hellinger_normal(P,Q):
     mu_p, mu_q, s_p, s_q = np.mean(P), np.mean(Q), np.std(P), np.std(Q)
     exp = np.exp(-(mu_p - mu_q)**2/(4*(s_p**2 + s_q**2)))
     base = np.sqrt((2*s_p*s_q)/(s_p**2 + s_q**2))
     return np.sqrt(1 - base**exp)
 
+
 def carlini_version(P,Q):
     return np.abs(np.mean(P) - np.mean(Q))/ (np.std(P) + np.std(Q))
 
+
 def mean_difference(P,Q):
     return np.abs(np.mean(P) - np.mean(Q))
+
 
 def kl_divergence(P,Q, direction="forward"):
     mu_p, mu_q, s_p, s_q = np.mean(P), np.mean(Q), np.std(P), np.std(Q)
@@ -187,19 +177,21 @@ def kl_divergence(P,Q, direction="forward"):
     else:
         return 0.5 * ((((mu_p-mu_q)**2 + s_q**2)/s_p**2) - np.log(s_q**2/s_p**2) - 1)
 
+
 def jeffrey_divergence(P,Q):
     D_pq = kl_divergence(P,Q, direction="forward")
     D_qp = kl_divergence(P,Q, direction="backward")
     return D_pq + D_qp
 
-def find_optimal_hypers(stats, in_indices,metric = "KL"):
+
+def find_optimal_hypers(target_stat, shadow_stat,in_indices,metric = "KL"):
     in_indices = np.array(in_indices)
-    N_MODELS = stats.shape[0]
+    N_MODELS = target_stat.shape[0]
     opt_hypers_per_model = np.zeros((N_MODELS,))
     for i in range(N_MODELS):
         print(f"Currently targetting model #{i+1}")
-        stats_target = stats[i,i,:,:].flatten()
-        stats_shadow = np.hstack([stats[:,:i,:,:],stats[:,i+1:,:,:]]) # select all columns but the target hypers
+        stats_target = target_stat[i,:].flatten()
+        stats_shadow = np.hstack([shadow_stat[:,:i,:,:],shadow_stat[:,i+1:,:,:]]) # select all columns but the target hypers
         shadow_indices = np.vstack([in_indices[:i,:],in_indices[i+1:,:]])
         per_column_overlap = np.zeros((N_MODELS-1,))
         for j in range(stats_shadow.shape[1]): # for the remaining columns compute overlap with target distribution/model
@@ -224,18 +216,19 @@ def find_optimal_hypers(stats, in_indices,metric = "KL"):
 
     return opt_hypers_per_model        
 
-def run_hpo_kl_mia(stats,indices,opt_hypers_per_model,use_global_variance=False):
+
+def run_kl_lira(target_stat,shadow_stat,indices,opt_hypers_per_model,use_global_variance=False):
     in_indices = np.array(indices)
     all_y_true, all_y_score = [],[]
-    N_MODELS = stats.shape[0]
+    N_MODELS = target_stat.shape[0]
     for i in range(N_MODELS): 
         print(f"Target model M[{i}][{i}]")
-        target_stats = stats[i,i,:,:]
+        target = target_stat[i,:]
         target_indices = in_indices[i,:]
         shadow_column = int(opt_hypers_per_model[i])
-        shadow_stats = np.vstack([stats[:i,shadow_column,:,:],stats[i+1:,shadow_column,:,:]])
+        shadow = np.vstack([shadow_stat[:i,shadow_column,:,:],shadow_stat[i+1:,shadow_column,:,:]])
         shadow_indices = np.vstack([in_indices[:i,:], in_indices[i+1:,:]])
-        curr_y_true, curr_y_score = compute_score(target_stats, shadow_stats, target_indices, 
+        curr_y_true, curr_y_score = compute_score(target, shadow, target_indices, 
                                                   shadow_indices,use_global_variance=use_global_variance)
         all_y_true.append(curr_y_true)
         all_y_score.append(curr_y_score)
