@@ -85,8 +85,7 @@ class Learner:
         parser.add_argument("--max_grad_norm_ub", type=float, default=10.0, help="UB of maximum gradient norm.")
         parser.add_argument("--learning_rate_lb", type=float, default=1e-7, help="LB of learning rate")
         parser.add_argument("--learning_rate_ub", type=float,  default=1e-2, help="UB of learning rate")
-        parser.add_argument("--tune", dest="tune", default=False, action="store_true",
-                                    help="If True, just compute the hypers and save them.")
+
         # DP options
         parser.add_argument("--private", dest="private", default=False, action="store_true",
                             help="If true, use differential privacy.")
@@ -104,14 +103,6 @@ class Learner:
         parser.add_argument("--save_models", type=bool, default=False,
                                     help="If True, save the models trained for LiRA.")
     
-        parser.add_argument("--start_data_split", type=int, default=0,
-                            help="Starting index of data split to train tfor the LiRA attack.")
-        parser.add_argument("--stop_data_split", type=int, default=257,
-                            help="Stopping number of data split to train tfor the LiRA attack.")
-        parser.add_argument("--start_hypers", type=int, default=0,
-                            help="Starting index of hypers to train tfor the LiRA attack.")
-        parser.add_argument("--stop_hypers", type=int, default=257,
-                            help="Stopping index of hypers to train tfor the LiRA attack.")
         parser.add_argument("--num_shadow_models", type=int, default=256,
                             help="Total number of shadow models.")
         
@@ -123,12 +114,9 @@ class Learner:
         set_seeds(self.args.seed)
         limit_tensorflow_memory_usage(2048)
 
-        self.accuracies = {"in": np.zeros((self.args.stop_data_split - self.args.start_data_split, 
-                                             self.args.stop_hypers - self.args.start_hypers)),
-                           "out": np.zeros((self.args.stop_data_split - self.args.start_data_split, 
-                                             self.args.stop_hypers - self.args.start_hypers)),
-                           "test": np.zeros((self.args.stop_data_split - self.args.start_data_split, 
-                                             self.args.stop_hypers - self.args.start_hypers))}
+        self.accuracies = {"in": np.zeros(shape=(self.args.num_shadow_models + 1,1)),
+                           "out": np.zeros(shape=(self.args.num_shadow_models + 1,1)),
+                           "test": np.zeros(shape=(self.args.num_shadow_models + 1,1))}
         
         # ensure the directory to hold results exists
         self.exp_dir = f"experiment_{self.args.exp_id}"
@@ -166,6 +154,7 @@ class Learner:
             tune_features, tune_labels = self.dataset_reader.get_tuning_batch()
             print(f"Dimensions of the tuning images = {tune_features.shape}")
 
+            # loading the test data
             test_set_size = self.dataset_reader.get_target_dataset_length()
             self.num_test_batches = int(np.ceil(float(test_set_size) / float(self.args.test_batch_size)))
             self.test_data = {'images':[],'labels':[]}
@@ -186,71 +175,56 @@ class Learner:
                     self.args.examples_per_class,
                     int(self.args.target_epsilon) if self.args.private else 'inf'))
             
-            if self.args.tune:
-                self.data_splits = []
-                n = tune_features.shape[0]
-                assert self.args.start_data_split == self.args.start_hypers
-                assert self.args.stop_data_split == self.args.stop_hypers
-                for idx in range(0,self.args.num_shadow_models+1):
-                    if idx < self.args.start_hypers:
-                        continue
-                    elif idx == self.args.stop_hypers:
-                        break
-                    else:
-                        print(f"Tuning for index #{idx}")
-                        np.random.seed(idx + 1 + self.args.seed)
-                        D_i = np.random.binomial(1, 0.5, n).astype(bool)
-                        x_i, y_i = tune_features[D_i], tune_labels[D_i]
-                        self.data_splits.append(D_i)
-                        opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
-                        self.hypers["learning_rate"].append(opt_args_i.learning_rate)
-                        self.hypers["batch_size"].append(opt_args_i.train_batch_size)
-                        if opt_args_i.private:
-                            self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
+            self.data_splits = []
+            n = tune_features.shape[0]
+            for idx in range(0,self.args.num_shadow_models+1):
+                print(f"Tuning for index #{idx}")
+                np.random.seed(idx + 1 + self.args.seed)
+                D_i = np.random.binomial(1, 0.5, n).astype(bool)
+                x_i, y_i = tune_features[D_i], tune_labels[D_i]
+                self.data_splits.append(D_i)
+                opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
+                self.hypers["learning_rate"].append(opt_args_i.learning_rate)
+                self.hypers["batch_size"].append(opt_args_i.train_batch_size)
+                if opt_args_i.private:
+                    self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
 
-                    with open(hypers_file_path, 'wb') as f:
-                        pickle.dump(self.hypers,f)  
+            with open(hypers_file_path, 'wb') as f:
+                pickle.dump(self.hypers,f)  
 
-                    with open(data_file_path,"wb") as f:
-                        pickle.dump(self.data_splits,f)                                                        
+            with open(data_file_path,"wb") as f:
+                pickle.dump(self.data_splits,f)                                                        
 
-            else:
-                # load the hypers and training data splits
-                with open(hypers_file_path, 'rb') as f:
-                    self.hypers = pickle.load(f)
 
-                with open(data_file_path, 'rb') as f:
-                    self.data_splits = pickle.load(f)
+            # build the dict to store the stats
+            n = 2 * self.num_classes * self.args.examples_per_class
 
-                # build the dict to store the stats
-                n = 2 * self.num_classes * self.args.examples_per_class
-                self.model_stats = np.zeros(shape=(self.args.stop_data_split - self.args.start_data_split,
-                                                self.args.stop_hypers - self.args.start_hypers,
-                                                n, 
-                                                1))
-                
-                print("Shape of stats array =",self.model_stats.shape)
-                self.run_lira(
-                    x=train_features,
-                    y=train_labels
-                    )
+            self.model_stats = np.zeros(shape=(self.args.num_shadow_models+1,n,1))
+
+            print("Shape of stats array =",self.model_stats.shape)
+            self.run_lira(
+                x=train_features,
+                y=train_labels
+                )
+
 
     def train_test(
             self,
             x,y,
             num_classes,
-            array_coords =(0,0),
+            # array_coords =(0,0),
+            i=0,
             sample_weight=None):
 
         self.start_time_final_run = datetime.now()
-        i,j = array_coords
+        # i,j = array_coords
         in_train_features, in_train_labels = x[self.data_splits[i]].to(self.device), y[self.data_splits[i]].to(self.device)
         out_train_features, out_train_labels = x[~self.data_splits[i]].to(self.device), y[~self.data_splits[i]].to(self.device)
 
-        self.args.learning_rate = self.hypers["learning_rate"][j]
-        self.args.train_batch_size = self.hypers["batch_size"][j]
+        self.args.learning_rate = self.hypers["learning_rate"][i]
+        self.args.train_batch_size = self.hypers["batch_size"][i]
         if self.args.private:
-            self.args.max_grad_norm = self.hypers["max_grad_norm"][j]
+            self.args.max_grad_norm = self.hypers["max_grad_norm"][i]
 
         train_loader = DataLoader(
             TensorDataset(in_train_features, in_train_labels),
@@ -294,25 +268,27 @@ class Learner:
                 print("Invalid classifier option.")
                 sys.exit()        
 
-        in_accuracy = self.validate_linear(model, train_loader)
-        self.accuracies["in"][i - self.args.start_data_split][j - self.args.start_hypers] = in_accuracy 
+        in_accuracy = (self.validate_linear(model, train_loader)).cpu()
+        self.accuracies["in"][i] = in_accuracy 
         accuracy = (self.test_linear(model=model)).cpu()
-        self.accuracies["test"][i - self.args.start_data_split][j - self.args.start_hypers] = accuracy
+        self.accuracies["test"][i] = accuracy
         out_dataloader = DataLoader(
                         TensorDataset(out_train_features,out_train_labels),
                         batch_size= self.args.train_batch_size if self.args.private else min(self.args.train_batch_size, self.args.max_physical_batch_size),
                         shuffle=True) 
         
-        out_accuracy = self.validate_linear(model, out_dataloader)
-        self.accuracies["out"][i - self.args.start_data_split][j - self.args.start_hypers] = out_accuracy
-        print(f'M[{i,j}] with {self.data_splits[i - self.args.start_data_split].sum()} examples. Test Accuracy = {accuracy}. Epsilon = {self.eps}')
+        out_accuracy = (self.validate_linear(model, out_dataloader)).cpu()
+        self.accuracies["out"][i] = out_accuracy
+        print(f'M[{i,i}] with {self.data_splits[i].sum()} examples. Test Accuracy = {accuracy}. Epsilon = {self.eps}')
         
         # store the stats associated with model[i][j] 
         stats,_ = self.get_stat_and_loss_aug(model, x, y.numpy(), sample_weight)
-        self.model_stats[i - self.args.start_data_split][j - self.args.start_hypers] = stats 
+        self.model_stats[i] = stats 
         del model
         gc.collect()
         torch.cuda.empty_cache()
+
+
 
     def fine_tune_batch(self, model, train_loader):
         model.train()
@@ -374,6 +350,8 @@ class Learner:
 
         return eps, delta
 
+
+
     def validate_linear(self, model, val_loader):
         model.eval()
         with torch.no_grad():
@@ -391,6 +369,8 @@ class Learner:
             accuracy = compute_accuracy_from_predictions(predictions, labels)
         return accuracy
 
+
+
     def test_linear(self, model):
         model.eval()
         with torch.no_grad():
@@ -407,36 +387,37 @@ class Learner:
             accuracy = compute_accuracy_from_predictions(predictions, labels)
         return accuracy
 
+
+
     def run_lira(self, x, y):
         # Sample weights are set to `None` by default, but can be changed here.
         sample_weight = None
-        for i in range(self.args.start_data_split, self.args.stop_data_split): # dataset loop
-            for j in range(self.args.start_hypers,self.args.stop_hypers): # hyperparameters loop
+        for i in range(0,self.args.num_shadow_models+1): # dataset loop
                 self.train_test(x,y,
                                 self.num_classes,
-                                array_coords=(i,j),
+                                i=i,
                                 sample_weight=sample_weight)
 
         # save stat, and train/test accuracies
-        filename = os.path.join(self.directory, 'stat_{}_{}_{}_r_{}_to_{}.pkl'.format(
+        filename = os.path.join(self.directory, 'stat_{}_{}_{}_r_0_to_{}.pkl'.format(
                 self.args.learnable_params,
                 self.args.examples_per_class,
                 int(self.args.target_epsilon) if self.args.private else 'inf',
-                self.args.start_hypers,
-                self.args.stop_hypers))
+                self.args.num_shadow_models+1))
         
         with open(filename, 'wb') as f:
             pickle.dump(self.model_stats, f)
 
-        filename = os.path.join(self.directory, 'accs_{}_{}_{}_r_{}_to_{}.pkl'.format(
+        filename = os.path.join(self.directory, 'accs_{}_{}_{}_r_0_to_{}.pkl'.format(
                 self.args.learnable_params,
                 self.args.examples_per_class,
                 int(self.args.target_epsilon) if self.args.private else 'inf',
-                self.args.start_hypers,
-                self.args.stop_hypers))
+                self.args.num_shadow_models+1))
         
         with open(filename, 'wb') as f:
             pickle.dump(self.accuracies, f)
+
+
 
     def get_stat_and_loss_aug(self,
             model,
