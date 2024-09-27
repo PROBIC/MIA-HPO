@@ -15,9 +15,10 @@ def main():
 class Learner:
     def __init__(self):
         self.args = self.parse_command_line()
-        self.scores = {"CMIA":None,
-                       "WBMIA": None,
-                       "ACCMIA":None}
+        self.scores = {"ACC-LiRA":None,
+                       "KL-LiRA":None}
+        self.opt_args = {
+                       "KL-LiRA":None}
 
     """
     Command line parser
@@ -65,7 +66,7 @@ class Learner:
             sys.exit()
 
 
-        # load the training data splits, accuracies and stats
+        # load the training data splits and stats
         filename = os.path.join(self.stats_dir, 'stat_{}_{}_{}_r_0_to_{}.pkl'.format(
                 self.args.learnable_params,
                 self.args.examples_per_class,
@@ -82,31 +83,33 @@ class Learner:
             in_indices = pickle.load(f)
             in_indices = in_indices[:self.args.num_models] 
 
-        with open(os.path.join(self.stats_dir, 'accs_{}_{}_{}_r_0_to_{}.pkl'.format(
-                self.args.learnable_params,
-                self.args.examples_per_class,
-                self.target_epsilon, 
-                self.args.num_models)), 'rb') as f:
-            accs = pickle.load(f)
-
         # Complete TD
-        self.scores["CMIA"] = run_hpo_acc_mia(stats, in_indices,use_global_variance = False)
-        # WB-MIA
-        self.scores["WBMIA"] = run_white_box_mia(stats,in_indices,use_global_variance=False)
-        # ACCMIA
-        opt_hypers_per_model = find_optimal_hypers_by_acc(stats,in_indices,accuracies=accs)   
-        self.scores["ACCMIA"] = run_acc_mia(stats,in_indices,opt_hypers_per_model)        
+        self.scores["ACC-LiRA"] = run_acc_lira(stats, in_indices,use_global_variance = False)
+        # # WB-MIA
+        self.scores["WB-LiRA"] = run_wb_lira(stats,in_indices,use_global_variance=False)
+        # MIA-KL
+        opt_hypers_per_model_min = find_optimal_hypers(stats,in_indices,metric="KL")   
+        self.opt_args["KL-LiRA"] = opt_hypers_per_model_min
+        self.scores["KL-LiRA"] = run_kl_lira(stats,in_indices,opt_hypers_per_model_min)
 
-        filename = os.path.join(self.stats_dir, 'scores_{}_{}_{}_acc.pkl'.format(
+        filename = os.path.join(self.stats_dir, 'scores_{}_{}_{}.pkl'.format(
         self.args.learnable_params,
         self.args.examples_per_class,
         self.target_epsilon))
             
         with open(filename, 'wb') as f:
             pickle.dump(self.scores, f)   
-    
+
+        filename = os.path.join(self.stats_dir, 'opt_shadow_hypers_{}_{}_{}.pkl'.format(
+        self.args.learnable_params,
+        self.args.examples_per_class,
+        self.target_epsilon))
             
-def run_hpo_acc_mia(stat, in_indices, use_global_variance=False):
+        with open(filename, 'wb') as f:
+            pickle.dump(self.opt_args, f)       
+        
+        
+def run_acc_lira(stat, in_indices, use_global_variance=False):
     N = stat.shape[0]
     cmia_stat = []
     for i in range(N):
@@ -148,7 +151,7 @@ def compute_score(target_stats, shadow_stats, target_in_indices, shadow_in_indic
     return y_true, scores
 
 
-def run_white_box_mia(stats,indices,use_global_variance=False):
+def run_wb_lira(stats,indices,use_global_variance=False):
     in_indices = np.array(indices)
     all_y_true, all_y_score = [],[]
     N_MODELS = stats.shape[0]
@@ -165,22 +168,63 @@ def run_white_box_mia(stats,indices,use_global_variance=False):
         all_y_score.append(curr_y_score)
     return {"y_true": np.hstack(all_y_true), "y_score": np.hstack(all_y_score)}
 
+def hellinger_normal(P,Q):
+    mu_p, mu_q, s_p, s_q = np.mean(P), np.mean(Q), np.std(P), np.std(Q)
+    exp = np.exp(-(mu_p - mu_q)**2/(4*(s_p**2 + s_q**2)))
+    base = np.sqrt((2*s_p*s_q)/(s_p**2 + s_q**2))
+    return np.sqrt(1 - base**exp)
 
-def find_optimal_hypers_by_acc(stats, in_indices,accuracies):
+def carlini_version(P,Q):
+    return np.abs(np.mean(P) - np.mean(Q))/ (np.std(P) + np.std(Q))
+
+def mean_difference(P,Q):
+    return np.abs(np.mean(P) - np.mean(Q))
+
+def kl_divergence(P,Q, direction="forward"):
+    mu_p, mu_q, s_p, s_q = np.mean(P), np.mean(Q), np.std(P), np.std(Q)
+    if direction == "forward":
+        return 0.5 * ((((mu_p-mu_q)**2 + s_p**2)/s_q**2) - np.log(s_p**2/s_q**2) - 1)
+    else:
+        return 0.5 * ((((mu_p-mu_q)**2 + s_q**2)/s_p**2) - np.log(s_q**2/s_p**2) - 1)
+
+def jeffrey_divergence(P,Q):
+    D_pq = kl_divergence(P,Q, direction="forward")
+    D_qp = kl_divergence(P,Q, direction="backward")
+    return D_pq + D_qp
+
+def find_optimal_hypers(stats, in_indices,metric = "KL"):
     in_indices = np.array(in_indices)
     N_MODELS = stats.shape[0]
-    opt_hypers_per_target = np.zeros((N_MODELS,))
+    opt_hypers_per_model = np.zeros((N_MODELS,))
     for i in range(N_MODELS):
-        shadow_accs = np.hstack([accuracies[:,:i],accuracies[:,i+1:]]) # select all columns but the target hypers
-        shadow_accs = np.vstack([shadow_accs[:i,:],shadow_accs[i+1:,:]])
-        per_column_acc = np.zeros((N_MODELS-1,))
-        for j in range(N_MODELS-1):
-            per_column_acc[j] = np.mean(shadow_accs[:,j])
-        per_column_acc = np.insert(per_column_acc,i,-1)
-        opt_hypers_per_target[i] = np.argmax(per_column_acc)
-    return opt_hypers_per_target 
+        print(f"Currently targetting model #{i+1}")
+        stats_target = stats[i,i,:,:].flatten()
+        stats_shadow = np.hstack([stats[:,:i,:,:],stats[:,i+1:,:,:]]) # select all columns but the target hypers
+        shadow_indices = np.vstack([in_indices[:i,:],in_indices[i+1:,:]])
+        per_column_overlap = np.zeros((N_MODELS-1,))
+        for j in range(stats_shadow.shape[1]): # for the remaining columns compute overlap with target distribution/model
+            overlaps = np.zeros((N_MODELS-1,))
+            # select all entries - models trained on target dataset
+            curr_shadow_column = np.vstack([stats_shadow[:i,j,:,:],stats_shadow[i+1:,j,:,:]])
+            for k in range(curr_shadow_column.shape[0]):
+                if metric == "hellinger":
+                    overlaps[k] = hellinger_normal(stats_target[shadow_indices[k]],curr_shadow_column[k,shadow_indices[k],:])
+                elif metric == "carlini":
+                    overlaps[k] = carlini_version(stats_target[shadow_indices[k]],curr_shadow_column[k,shadow_indices[k],:])
+                elif metric == "KL":
+                    overlaps[k] = kl_divergence(stats_target[shadow_indices[k]],curr_shadow_column[k,shadow_indices[k],:],direction="forward")
+                elif metric == "jeffreys":
+                    overlaps[k] = jeffrey_divergence(stats_target[shadow_indices[k]],curr_shadow_column[k,shadow_indices[k],:])
+                else:
+                    overlaps[k] = mean_difference(stats_target[shadow_indices[k]],curr_shadow_column[k,shadow_indices[k],:])
+            per_column_overlap[j] = np.mean(overlaps)
+        # for the target index, impute np.inf as the similarity measure. 
+        per_column_overlap = np.insert(per_column_overlap,i,np.inf)
+        opt_hypers_per_model[i] = np.argmin(per_column_overlap) 
 
-def run_acc_mia(stats,indices,opt_hypers_per_model,use_global_variance=True):
+    return opt_hypers_per_model        
+
+def run_kl_lira(stats,indices,opt_hypers_per_model,use_global_variance=False):
     in_indices = np.array(indices)
     all_y_true, all_y_score = [],[]
     N_MODELS = stats.shape[0]
@@ -196,7 +240,6 @@ def run_acc_mia(stats,indices,opt_hypers_per_model,use_global_variance=True):
         all_y_true.append(curr_y_true)
         all_y_score.append(curr_y_score)
     return {"y_true": np.hstack(all_y_true), "y_score": np.hstack(all_y_score)}
-
 
 if __name__ == "__main__":
     with warnings.catch_warnings():

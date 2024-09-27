@@ -15,11 +15,11 @@ def main():
 class Learner:
     def __init__(self):
         self.args = self.parse_command_line()
-        self.scores = {"CMIA":None,
-                       "WBMIA": None,
-                       "MIA-KL":None}
+        self.scores = {"ACC-LiRA":None,
+                       "WB-LiRA": None,
+                       "KL-LiRA":None}
         self.opt_args = {
-                       "MIA-KL":None}
+                       "KL-LiRA":None}
 
     """
     Command line parser
@@ -85,13 +85,13 @@ class Learner:
             in_indices = in_indices[:self.args.num_models] 
 
         # Complete TD
-        self.scores["CMIA"] = run_hpo_acc_mia(stats, in_indices,use_global_variance = False)
+        self.scores["ACC-LiRA"] = run_acc_lira(stats, in_indices,use_global_variance = False)
         # WB-MIA
-        self.scores["WBMIA"] = run_white_box_mia(stats,in_indices,use_global_variance=False)
+        self.scores["WB-LiRA"] = run_wb_lira(stats,in_indices,use_global_variance=False)
         # MIA-KL
         opt_hypers_per_model_min = find_optimal_hypers(stats,in_indices,metric="KL")   
-        self.opt_args["MIA-KL"] = opt_hypers_per_model_min
-        self.scores["MIA-KL"] = run_hpo_kl_mia(stats,in_indices,opt_hypers_per_model_min)
+        self.opt_args["KL-LiRA"] = opt_hypers_per_model_min
+        self.scores["KL-LiRA"] = run_kl_lira(stats,in_indices,opt_hypers_per_model_min)
 
         filename = os.path.join(self.stats_dir, 'scores_{}_{}_{}_offline.pkl'.format(
         self.args.learnable_params,
@@ -110,7 +110,7 @@ class Learner:
         #     pickle.dump(self.opt_args, f)       
         
         
-def run_hpo_acc_mia(stat, in_indices, use_global_variance=False):
+def run_acc_lira(stat, in_indices, use_global_variance=False):
     N = stat.shape[0]
     cmia_stat = []
     for i in range(N):
@@ -152,7 +152,7 @@ def compute_score(target_stats, shadow_stats, target_in_indices, shadow_in_indic
     return y_true, scores
 
 
-def run_white_box_mia(stats,indices,use_global_variance=False):
+def run_wb_lira(stats,indices,use_global_variance=False):
     in_indices = np.array(indices)
     all_y_true, all_y_score = [],[]
     N_MODELS = stats.shape[0]
@@ -220,7 +220,7 @@ def find_optimal_hypers(stats, in_indices,metric = "KL"):
 
     return opt_hypers_per_model        
 
-def run_hpo_kl_mia(stats,indices,opt_hypers_per_model,use_global_variance=False):
+def run_kl_lira(stats,indices,opt_hypers_per_model,use_global_variance=False):
     in_indices = np.array(indices)
     all_y_true, all_y_score = [],[]
     N_MODELS = stats.shape[0]

@@ -21,10 +21,10 @@ def main():
 class Learner:
     def __init__(self):
         self.args = self.parse_command_line()
-        self.scores = {"CMIA":None,
-                       "MIA-KL":None}
+        self.scores = {"ACC-LiRA":None,
+                       "KL-LiRA":None}
         self.opt_args = {
-                       "MIA-KL":None}
+                       "KL-LiRA":None}
 
     """
     Command line parser
@@ -95,11 +95,11 @@ class Learner:
             in_indices = in_indices[:self.args.num_models] 
 
         # ACC-LiRA
-        self.scores["CMIA"] = run_acc_lira(target_stats, in_indices,use_global_variance = False)
+        self.scores["ACC-LiRA"] = run_acc_lira(target_stats, in_indices,use_global_variance = False)
         # KL-LiRA
         opt_hypers_per_model_min = find_optimal_hypers(target_stats,shadow_stats,in_indices,metric="KL")   
-        self.opt_args["MIA-KL"] = opt_hypers_per_model_min
-        self.scores["MIA-KL"] = run_kl_lira(target_stats,shadow_stats,in_indices,opt_hypers_per_model_min)
+        self.opt_args["KL-LiRA"] = opt_hypers_per_model_min
+        self.scores["KL-LiRA"] = run_kl_lira(target_stats,shadow_stats,in_indices,opt_hypers_per_model_min)
        
         with open(os.path.join(self.target_stats_dir, 'scores_{}_{}_{}.pkl'.format(
                 self.args.learnable_params,
