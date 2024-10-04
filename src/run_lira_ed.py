@@ -95,7 +95,7 @@ class Learner:
             in_indices = in_indices[:self.args.num_models] 
 
         # ACC-LiRA
-        self.scores["ACC-LiRA"] = run_acc_lira(target_stats, in_indices,use_global_variance = False)
+        self.scores["ACC-LiRA"] = run_acc_lira(target_stats, shadow_stats,in_indices,use_global_variance = False)
         # KL-LiRA
         opt_hypers_per_model_min = find_optimal_hypers(target_stats,shadow_stats,in_indices,metric="KL")   
         self.opt_args["KL-LiRA"] = opt_hypers_per_model_min
@@ -113,20 +113,21 @@ class Learner:
                 self.target_epsilon)), 'wb') as f:
             pickle.dump(self.opt_args, f)       
         
-        
-def run_acc_lira(cmia_stat, in_indices, use_global_variance=False):
-    N = cmia_stat.shape[0]
-    n = len(cmia_stat[0])
-    print(N,n)
-    # Now we do MIA for each model
+
+def run_acc_lira(target_stat, shadow_stat,in_indices, use_global_variance=False):
+    N = target_stat.shape[0]
+    n = len(target_stat[0])
+    cmia_shadow_stat = []
+    for i in range(N):
+        cmia_shadow_stat.append(shadow_stat[i,i,:,:])
     all_scores = []
     all_y_true = []
     for idx in range(N):
         print(f'Target model is #{idx}')
-        stat_target = cmia_stat[idx]  # statistics of target model, shape (n, k)
+        stat_target = target_stat[idx]  # statistics of target model, shape (n, k)
         in_indices_target = in_indices[idx]  # ground-truth membership, shape (n,)
 
-        stat_shadow = np.vstack([cmia_stat[:idx],cmia_stat[idx + 1:]])
+        stat_shadow = np.array(cmia_shadow_stat[:idx] + cmia_shadow_stat[idx + 1:])
         in_indices_shadow = np.array(in_indices[:idx] + in_indices[idx + 1:])
         stat_in = [stat_shadow[:, j][in_indices_shadow[:, j]] for j in range(n)]
         stat_out = [stat_shadow[:, j][~in_indices_shadow[:, j]] for j in range(n)]
@@ -141,7 +142,7 @@ def run_acc_lira(cmia_stat, in_indices, use_global_variance=False):
     
     return {"y_true": np.hstack(all_y_true),
            "y_score": np.hstack(all_scores)}
-  
+       
 
 
 def compute_score(target_stats, shadow_stats, target_in_indices, shadow_in_indices,use_global_variance=False):
