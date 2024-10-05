@@ -5,7 +5,7 @@ We make use of the following open-source libraries in our experiments:
 * Big Transfer (for the R-50 implementation): Copyright 2020 Google LLC https://github.com/google-research/big_transfer
   * Switch to the ```src``` directory in this repo and download the BiT pre-trained model for ResNet50: ```wget https://storage.googleapis.com/bit_models/BiT-M-R50x1.npz```
 
-General experiment options include:
+**General experiment options for training models include:**
 
 ```
 --dataset <cifar10,cifar100>
@@ -15,9 +15,11 @@ General experiment options include:
 --optimizer <adam,sgd>
 --private --target_epsilon <1,8>
 ```
-```--private --target_epsilon <1,8> --target_delta 1e-5``` is to implement differential privacy. For the non-DP setting, set ```--target_epsilon -1``` and do not use the ```--private``` flag.
+```--private --target_epsilon <1,8> ``` is to implement differential privacy. For the non-DP setting, set ```--target_epsilon -1``` and do not use the ```--private``` flag.
 
-For hyperparameter optimization (HPO) use the following options:
+We fixed ```--target_delta 1e-5```  for our experiments.
+
+**For hyperparameter optimization (HPO) use the following options:**
 
 ```
 --number_of_trials 20
@@ -32,11 +34,11 @@ In this section, we detail the implementation of code to study the effect of hyp
 
 To create the MIA Grid follow the given steps:
 
-* Use ```python3 src/build_mia_grid_head_td.py``` or  ```python3 src/build_mia_grid_film_td.py``` with the flag  ```--tune``` to sample the $\ D_0,D_1,...,D_M \$ data sets from the training data set $\ D_T \$ and the collect the corresponding optimal hyperparameters.
+* Use ```python3 src/build_mia_grid_head_td.py``` or  ```python3 src/build_mia_grid_film_td.py``` with the flag  ```--tune``` to sample the $\ D_0,D_1,...,D_M\$ data sets from the training data set $\ D_T\$ and the collect the corresponding optimal hyperparameters.
 
 * Use ```python3 src/build_mia_grid_head_td.py``` or ```python3 src/build_mia_grid_film_td.py``` without the flag  ```--tune``` to train the models for the MIA grid such that $\ \mathcal{M}_{D_i,\eta_j} \leftarrow \texttt{TRAIN} (D_i, \eta_j)\$.
 
-
+Once we have the logits for samples in $\ D_T\$ for the models in the MIA Grid, calculate the LiRA scores of samples using```python3 src/run_lira_td.py```
 
 ### EMPIRICAL PRIVACY LEAKAGE DUE TO HPO (Section VI & VII)
 
