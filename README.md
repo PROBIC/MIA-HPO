@@ -8,13 +8,24 @@ We make use of the following open-source libraries in our experiments:
 General experiment options include:
 
 ```
+--dataset <cifar10,cifar100>
 --feature_extractor <BiT-M-R50x1,vit-b-16> 
 --examples_per_class <number of examples per class, `-1` means the whole training set, `None` enables the VTAB split>
 --seed <for reproducibility, e.g., 0>
 --optimizer <adam,sgd>
 --private --target_epsilon <1,8>
 ```
-```--private --target_epsilon <1,8>``` is to implement differential privacy. For the non-DP setting, set ```--target_epsilon -1``` and do not use the ```--private``` flag.
+```--private --target_epsilon <1,8> --target_delta 1e-5``` is to implement differential privacy. For the non-DP setting, set ```--target_epsilon -1``` and do not use the ```--private``` flag.
+
+For hyperparameter optimization (HPO) use the following options:
+
+```
+--number_of_trials 20
+--train_batch_size_lb 10 --train_batch_size_ub 10000
+--max_grad_norm_lb 0.2 --max_grad_norm_ub 10.0
+--learning_rate_lb 1e-07 --learning_rate_ub 0.01
+```
+We fixed ```--epochs 40``` for our experiments.
 
 ### ATTACKS (Section III & IV)
 In this section, we detail the implementation of code to study the effect of hyperparameter selection to train shadow models on the performance of score-based membership inference attacks (MIAs).
