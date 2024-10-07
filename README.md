@@ -15,14 +15,22 @@ We make use of the following open-source libraries in our experiments:
 --optimizer <adam,sgd>
 --private --target_epsilon <1,8>
 --num_shadow_models <64>
---run_id
---exp_id
+--max_physical_batch_size  <for running under constrained memory> 
+--test_batch_size <for running under constrained memory> 
 ```
 The arguments ```--private --target_epsilon <1,8> ``` is to implement differential privacy. For the non-DP setting, set ```--target_epsilon -1``` and do not use the ```--private``` flag.
 
-The arguments ```--run_id``` and ```--exp_id``` are used to customize the path to store the results. The choice of the former depends on the examples per class whereas the latter depends on the level of privacy used in the experiments (for example, ```--rrun_id 1 --exp_id 1``` implies ```examples_per_class 100 --target_epsilon -1``` in our experiments).
-
 We fixed ```--target_delta 1e-5```  for our experiments.
+
+**Other setup options:**
+
+```
+--download_path_for_tensorflow_datasets <path to dataset>
+--checkpoint_dir <path to checkpoint directory>
+--run_id <sub-directory depending on examples_per_class>
+--exp_id <sub-directory for each experiment in a given run depending on the level of privacy>
+```
+The arguments ```--run_id``` and ```--exp_id``` are used to customize the path to store the results. The choice of the former depends on the examples per class whereas the latter depends on the level of privacy used in the experiments (for example, ```--rrun_id 1 --exp_id 1``` implies ```examples_per_class 100 --target_epsilon -1``` in our experiments).
 
 **For hyperparameter optimization (HPO) use the following options:**
 
