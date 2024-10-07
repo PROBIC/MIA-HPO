@@ -14,6 +14,7 @@ We make use of the following open-source libraries in our experiments:
 --seed <for reproducibility, e.g., 0>
 --optimizer <adam,sgd>
 --private --target_epsilon <1,8>
+--num_shadow_models <64>
 --run_id
 --exp_id
 ```
@@ -42,9 +43,19 @@ To create the MIA Grid follow the given steps:
 
 * Use ```python3 src/build_mia_grid_head_td.py``` or ```python3 src/build_mia_grid_film_td.py``` without the flag  ```--tune``` to train the models for the MIA grid such that $\ \mathcal{M}_{D_i,\eta_j} \leftarrow \texttt{TRAIN} (D_i, \eta_j)\$.
 
-Once we have the logits for samples in $\ D_T\$ for the models in the MIA Grid, calculate the LiRA scores of samples using ```python3 src/run_lira_td.py```.
+**NOTE:** Following additional arguments in the code to build the MIA Grid will allow the users to collect optimal hyperparameters/data set and train models for the MIA Grid in parts when limited compute is available to run the code:
 
-For running LiRA in the Black-Box setting, use ```python3 src/run_lira_bb.py``` where the arguments ```--target_stats_dir``` and ```--shadow_stats_dir``` should point to the logits collected from models trained with the target architecture and the shadow architecture respectively on same data splits sampled from $\ D_T\$.
+```
+--start_data_split
+--stop_data_split
+--start_hypers
+--stop_hypers 
+```
+For example, ```python3 src/build_mia_grid_film_td.py -- start_data_split 0 --stop_data_split 5 --start_hypers 0 --stop_hypers 5 --tune``` will sample and collect optimal hyperparameters for  $\ D_0,D_1,D_2,D_3,D_4\$ of the 65 (total number of shadow models + 1) data sets sampled from $\ D_T\$. 
+
+Once we have the logits for samples in $\ D_T\$ for the models in the MIA Grid:
+* Calculate the LiRA scores of samples using ```python3 src/run_lira_td.py``` when the target architecture is known and can be used to train the shadow models.
+* To simulate LiRA in the Black-Box setting, use ```python3 src/run_lira_bb.py``` where the arguments ```--target_stats_dir``` and ```--shadow_stats_dir``` should point to the logits collected from models trained with the target architecture and the shadow architecture respectively on same data splits sampled from $\ D_T\$.
 
 ### EMPIRICAL PRIVACY LEAKAGE DUE TO HPO (Section VI & VII)
 
