@@ -3,7 +3,7 @@ We make use of the following open-source libraries in our experiments:
 
 * TIMM (for the PyTorch VIT-B implementation): Copyright 2020 Ross Wightman https://github.com/rwightman/pytorch-image-models
 * Big Transfer (for the R-50 implementation): Copyright 2020 Google LLC https://github.com/google-research/big_transfer
-  * Switch to the ```src``` directory in this repo and download the BiT pre-trained model for ResNet50: ```wget https://storage.googleapis.com/bit_models/BiT-M-R50x1.npz```
+  * Switch to the ```src``` directory and download the BiT pre-trained model for ResNet50: ```wget https://storage.googleapis.com/bit_models/BiT-M-R50x1.npz```
 
 **General experiment options for training models include:**
 
