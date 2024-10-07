@@ -51,7 +51,7 @@ To create the MIA Grid follow the given steps:
 --start_hypers
 --stop_hypers 
 ```
-For example, ```python3 src/build_mia_grid_film_td.py -- start_data_split 0 --stop_data_split 5 --start_hypers 0 --stop_hypers 5 --tune``` will sample and collect optimal hyperparameters for  $\ D_0,D_1,D_2,D_3,D_4\$ of the 65 (total number of shadow models + 1) data sets sampled from $\ D_T\$. 
+For example, ```python3 src/build_mia_grid_film_td.py -- start_data_split 0 --stop_data_split 5 --start_hypers 0 --stop_hypers 5 --tune``` will sample and collect optimal hyperparameters for  $\ D_0,D_1,D_2,D_3,D_4\$ of the 65 (```--num_shadow_models``` + 1) data sets sampled from $\ D_T\$. 
 
 Once we have the logits for samples in $\ D_T\$ for the models in the MIA Grid:
 * Calculate the LiRA scores of samples using ```python3 src/run_lira_td.py``` when the target architecture is known and can be used to train the shadow models.
