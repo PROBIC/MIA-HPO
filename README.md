@@ -14,8 +14,12 @@ We make use of the following open-source libraries in our experiments:
 --seed <for reproducibility, e.g., 0>
 --optimizer <adam,sgd>
 --private --target_epsilon <1,8>
+--run_id
+--exp_id
 ```
-```--private --target_epsilon <1,8> ``` is to implement differential privacy. For the non-DP setting, set ```--target_epsilon -1``` and do not use the ```--private``` flag.
+The arguments ```--private --target_epsilon <1,8> ``` is to implement differential privacy. For the non-DP setting, set ```--target_epsilon -1``` and do not use the ```--private``` flag.
+
+The arguments ```--run_id``` and ```--exp_id``` are used to customize the path to store the results. The choice of the former depends on the examples per class whereas the latter depends on the level of privacy used in the experiments (for example, ```--rrun_id 1 --exp_id 1``` implies ```examples_per_class 100 --target_epsilon -1``` in our experiments).
 
 We fixed ```--target_delta 1e-5```  for our experiments.
 
@@ -38,8 +42,12 @@ To create the MIA Grid follow the given steps:
 
 * Use ```python3 src/build_mia_grid_head_td.py``` or ```python3 src/build_mia_grid_film_td.py``` without the flag  ```--tune``` to train the models for the MIA grid such that $\ \mathcal{M}_{D_i,\eta_j} \leftarrow \texttt{TRAIN} (D_i, \eta_j)\$.
 
-Once we have the logits for samples in $\ D_T\$ for the models in the MIA Grid, calculate the LiRA scores of samples using```python3 src/run_lira_td.py```
+Once we have the logits for samples in $\ D_T\$ for the models in the MIA Grid, calculate the LiRA scores of samples using ```python3 src/run_lira_td.py```.
+
+For running LiRA in the Black-Box setting, use ```python3 src/run_lira_bb.py``` where the arguments ```--target_stats_dir``` and ```--shadow_stats_dir``` should point to the logits collected from models trained with the target architecture and the shadow architecture respectively on same data splits sampled from $\ D_T\$.
 
 ### EMPIRICAL PRIVACY LEAKAGE DUE TO HPO (Section VI & VII)
 
-TO BE EDITED
+* Use ```python3 src/train_head_ed_target_models.py``` or  ```python3 src/train_film_ed_target_models.py``` to train the target models in the ED-HPO setting. 
+
+* To run LiRA on the target models in ED-HPO use ```python3 arc/run_lira_ed.py```. 
