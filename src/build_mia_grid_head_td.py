@@ -58,8 +58,6 @@ class Learner:
                             default='BiT-M-R50x1', help="Feature extractor to use.")
         parser.add_argument("--classifier", choices=['linear'], default='linear',
                             help="Which classifier to use.")
-        parser.add_argument("--learnable_params", choices=['none', 'all', 'film'], default='film',
-                            help="Which feature extractor parameters to learn.")
         parser.add_argument("--download_path_for_tensorflow_datasets", default=None,
                             help="Path to download the tensorflow datasets.")
         parser.add_argument("--results", help="Directory to load results from.")
@@ -90,7 +88,7 @@ class Learner:
         parser.add_argument("--private", dest="private", default=False, action="store_true",
                             help="If true, use differential privacy.")
         parser.add_argument("--noise_multiplier", type=float, default=1.0, help="Noise multiplier.")
-        parser.add_argument("--target_epsilon", type=float, default=10.0, help="Maximum value of epsilon allowed.")
+        parser.add_argument("--target_epsilon", type=float, default=-1, help="Maximum value of epsilon allowed.")
         parser.add_argument("--target_delta", type = float, default = 1e-5, help="The delta for DP training.")
         parser.add_argument("--max_physical_batch_size", type=int, default=400, help="Maximum physical batch size")
         parser.add_argument("--optimizer", choices=['adam', 'sgd'], default='adam')
@@ -105,13 +103,13 @@ class Learner:
     
         parser.add_argument("--start_data_split", type=int, default=0,
                             help="Starting index of data split to train tfor the LiRA attack.")
-        parser.add_argument("--stop_data_split", type=int, default=257,
+        parser.add_argument("--stop_data_split", type=int, default=65,
                             help="Stopping number of data split to train tfor the LiRA attack.")
         parser.add_argument("--start_hypers", type=int, default=0,
                             help="Starting index of hypers to train tfor the LiRA attack.")
-        parser.add_argument("--stop_hypers", type=int, default=257,
+        parser.add_argument("--stop_hypers", type=int, default=65,
                             help="Stopping index of hypers to train tfor the LiRA attack.")
-        parser.add_argument("--num_shadow_models", type=int, default=256,
+        parser.add_argument("--num_shadow_models", type=int, default=64,
                             help="Total number of shadow models.")
         
         args = parser.parse_args()
@@ -136,7 +134,7 @@ class Learner:
                                              self.args.stop_hypers - self.args.start_hypers)),
                            "test": np.zeros((self.args.stop_data_split - self.args.start_data_split, 
                                              self.args.stop_hypers - self.args.start_hypers))}
-        
+        self.args.learnable_params = 'none'
         # ensure the directory to hold results exists
         self.exp_dir = f"experiment_{self.args.exp_id}"
         self.run_dir = f"Run_{self.args.run_id}"
@@ -162,7 +160,7 @@ class Learner:
                                                                                                                         n_classes=self.num_classes,
                                                                                                                         task="train")
 
-            # load the hypers and training data splits
+            # load/store the hypers and training data splits
             hypers_file_path = os.path.join(self.directory, 'opt_args_{}_{}_{}.pkl'.format(
                 self.args.learnable_params,
                 self.args.examples_per_class,
@@ -173,13 +171,14 @@ class Learner:
                     int(self.args.target_epsilon) if self.args.private else 'inf'))
             
             if self.args.tune:
-                if not os.path.isfile(hypers_file_path):
-                    self.data_splits = [] # record of tune splits
+                assert self.args.start_data_split == self.args.start_hypers
+                assert self.args.stop_data_split == self.args.stop_hypers
+                if self.args.start_data_split == 0: # no hypers/data files have been initialized
+                    self.data_splits = []
                     n = train_features.shape[0]
-                    assert self.args.num_shadow_models + 1 == self.args.stop_data_split
-                    assert self.args.start_data_split == self.args.start_hypers
-                    assert self.args.stop_data_split == self.args.stop_hypers
                     for idx in range(0,self.args.num_shadow_models+1):
+                        if idx == self.args.stop_data_split: # get the data split and hypers upto a select number < number of shadow models
+                            break
                         np.random.seed(idx + 1 + self.args.seed)
                         D_i = np.random.binomial(1, 0.5, n).astype(bool)
                         x_i, y_i = train_features[D_i], train_labels[D_i]
@@ -188,14 +187,34 @@ class Learner:
                         self.hypers["learning_rate"].append(opt_args_i.learning_rate)
                         self.hypers["batch_size"].append(opt_args_i.train_batch_size)
                         if opt_args_i.private:
-                            self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
-
+                            self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)  
                     with open(hypers_file_path, 'wb') as f:
                         pickle.dump(self.hypers,f)  
-
                     with open(data_file_path,"wb") as f:
-                        pickle.dump(self.data_splits,f)                                                       
-
+                        pickle.dump(self.data_splits,f)                                                                            
+                else:
+                    # load the old hypers/data splits
+                    with open(hypers_file_path, 'rb') as f:
+                        self.hypers = pickle.load(f)
+                    with open(data_file_path, 'rb') as f:
+                        self.data_splits = pickle.load(f)
+                    for idx in range(0,self.args.num_shadow_models+1):
+                        if idx == self.args.stop_data_split: 
+                            break
+                        elif idx >= self.args.start_data_split: # start storing the new hypers/data splits
+                            np.random.seed(idx + 1 + self.args.seed)
+                            D_i = np.random.binomial(1, 0.5, n).astype(bool)
+                            x_i, y_i = train_features[D_i], train_labels[D_i]
+                            self.data_splits.append(D_i)
+                            opt_args_i,_ = optimize_hyperparameters(idx, self.args, x_i, y_i, self.feature_dim, self.num_classes, self.args.seed) 
+                            self.hypers["learning_rate"].append(opt_args_i.learning_rate)
+                            self.hypers["batch_size"].append(opt_args_i.train_batch_size)
+                            if opt_args_i.private:
+                                self.hypers["max_grad_norm"].append(opt_args_i.max_grad_norm)
+                    with open(hypers_file_path, 'wb') as f:
+                        pickle.dump(self.hypers,f)  
+                    with open(data_file_path,"wb") as f:
+                        pickle.dump(self.data_splits,f)                     
             else:
                 with open(hypers_file_path, 'rb') as f:
                     self.hypers = pickle.load(f)

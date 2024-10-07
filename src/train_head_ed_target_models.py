@@ -58,8 +58,6 @@ class Learner:
                             default='BiT-M-R50x1', help="Feature extractor to use.")
         parser.add_argument("--classifier", choices=['linear'], default='linear',
                             help="Which classifier to use.")
-        parser.add_argument("--learnable_params", choices=['none', 'all', 'film'], default='film',
-                            help="Which feature extractor parameters to learn.")
         parser.add_argument("--download_path_for_tensorflow_datasets", default=None,
                             help="Path to download the tensorflow datasets.")
         parser.add_argument("--results", help="Directory to load results from.")
@@ -122,7 +120,7 @@ class Learner:
         self.accuracies = {"in": np.zeros(shape=(self.args.num_shadow_models + 1,1)),
                            "out": np.zeros(shape=(self.args.num_shadow_models + 1,1)),
                            "test": np.zeros(shape=(self.args.num_shadow_models + 1,1))}
-        
+        self.args.learnable_params = "none"
         # ensure the directory to hold results exists
         self.exp_dir = f"experiment_{self.args.exp_id}"
         self.run_dir = f"Run_{self.args.run_id}"
@@ -216,7 +214,7 @@ class Learner:
             model_dir = os.path.join(self.directory,"lira_models")
             if not os.path.exists(model_dir):
                 os.makedirs(model_dir)
-            filename = os.path.join(model_dir, 'model_{}_{}.pkl'.format(i+1, i+1))       
+            filename = os.path.join(model_dir, 'model_{}.pkl'.format(i+1))       
             if os.path.isfile(filename) and os.path.getsize(filename) > 0:
                 with open(filename, 'rb') as f:
                     model = pickle.load(f)
