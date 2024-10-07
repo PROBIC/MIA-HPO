@@ -1,5 +1,15 @@
 # MIA-HPO: Hyperparameters in Score-Based Membership Inference Attacks.
-We make use of the following open-source libraries in our experiments:
+
+### DEPENDENCIES
+
+The following modules are required to run our code:
+ * Python 3.8 or greater
+ * PyTorch 1.11 or greater (https://pytorch.org/)
+ * Opacus 1.3 or greater (https://opacus.ai/#quickstart)
+ * prv_accountant 0.2.0 or greater (https://github.com/microsoft/prv_accountant)
+ * Optuna 3.0 or greater (https://optuna.org/#installation)
+
+Additionally, we make use of the following open-source libraries in our experiments:
 
 * TIMM (for the PyTorch VIT-B implementation): Copyright 2020 Ross Wightman https://github.com/rwightman/pytorch-image-models
 * Big Transfer (for the R-50 implementation): Copyright 2020 Google LLC https://github.com/google-research/big_transfer
