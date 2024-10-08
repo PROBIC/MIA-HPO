@@ -17,6 +17,8 @@ Additionally, we make use of the following open-source libraries in our experime
 
 ### GENERAL SETUP
 
+We adapted the code provided at https://github.com/cambridge-mlg/dp-few-shot/ for our experiments.
+
 **General experiment options for training models include:**
 
 ```
