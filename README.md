@@ -83,4 +83,4 @@ Once we have the logits for samples in $\ D_T\$ for the models in the MIA Grid:
 
 * Use ```python3 src/train_head_ed_target_models.py``` or  ```python3 src/train_film_ed_target_models.py``` to train the target models in the ED-HPO setting. 
 
-* To run LiRA on the target models in ED-HPO use ```python3 arc/run_lira_ed.py```. 
+* To run LiRA on the target models in ED-HPO use ```python3 arc/run_lira_ed.py```. It has an additional parameter (compared to ```run_lira_td.py```), ```--shadow_dir``` which can be used to load the models trained for MIA under TD-HPO settings. We use these models as shadow models for running MIA under ED-HPO setting.
