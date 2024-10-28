@@ -1,9 +1,23 @@
 # MIA-HPO: Hyperparameters in Score-Based Membership Inference Attacks.
-We make use of the following open-source libraries in our experiments:
+
+### DEPENDENCIES
+
+The following modules are required to run our code:
+ * Python 3.8 or greater
+ * PyTorch 1.11 or greater (https://pytorch.org/)
+ * Opacus 1.3 or greater (https://opacus.ai/#quickstart)
+ * prv_accountant 0.2.0 or greater (https://github.com/microsoft/prv_accountant)
+ * Optuna 3.0 or greater (https://optuna.org/#installation)
+
+Additionally, we make use of the following open-source libraries in our experiments:
 
 * TIMM (for the PyTorch VIT-B implementation): Copyright 2020 Ross Wightman https://github.com/rwightman/pytorch-image-models
 * Big Transfer (for the R-50 implementation): Copyright 2020 Google LLC https://github.com/google-research/big_transfer
-  * Switch to the ```src``` directory in this repo and download the BiT pre-trained model for ResNet50: ```wget https://storage.googleapis.com/bit_models/BiT-M-R50x1.npz```
+  * Switch to the ```src``` directory and download the BiT pre-trained model for ResNet50: ```wget https://storage.googleapis.com/bit_models/BiT-M-R50x1.npz```
+
+### GENERAL SETUP
+
+We adapted the code provided at https://github.com/cambridge-mlg/dp-few-shot/ for our experiments.
 
 **General experiment options for training models include:**
 
@@ -14,10 +28,23 @@ We make use of the following open-source libraries in our experiments:
 --seed <for reproducibility, e.g., 0>
 --optimizer <adam,sgd>
 --private --target_epsilon <1,8>
+--num_shadow_models <64>
+--max_physical_batch_size  <for running under constrained memory> 
+--test_batch_size <for running under constrained memory> 
 ```
-```--private --target_epsilon <1,8> ``` is to implement differential privacy. For the non-DP setting, set ```--target_epsilon -1``` and do not use the ```--private``` flag.
+The arguments ```--private --target_epsilon <1,8> ``` is to implement differential privacy. For the non-DP setting, set ```--target_epsilon -1``` and do not use the ```--private``` flag.
 
 We fixed ```--target_delta 1e-5```  for our experiments.
+
+**Other setup options:**
+
+```
+--download_path_for_tensorflow_datasets <path to dataset>
+--checkpoint_dir <path to checkpoint directory>
+--run_id <sub-directory depending on examples_per_class>
+--exp_id <sub-directory for each experiment in a given run depending on the level of privacy>
+```
+The arguments ```--run_id``` and ```--exp_id``` are used to customize the path to store the results. The choice of the former depends on the examples per class whereas the latter depends on the level of privacy used in the experiments (for example, ```--rrun_id 1 --exp_id 1``` implies ```examples_per_class 100 --target_epsilon -1``` in our experiments).
 
 **For hyperparameter optimization (HPO) use the following options:**
 
@@ -38,8 +65,22 @@ To create the MIA Grid follow the given steps:
 
 * Use ```python3 src/build_mia_grid_head_td.py``` or ```python3 src/build_mia_grid_film_td.py``` without the flag  ```--tune``` to train the models for the MIA grid such that $\ \mathcal{M}_{D_i,\eta_j} \leftarrow \texttt{TRAIN} (D_i, \eta_j)\$.
 
-Once we have the logits for samples in $\ D_T\$ for the models in the MIA Grid, calculate the LiRA scores of samples using```python3 src/run_lira_td.py```
+**NOTE:** Following additional arguments in the code to build the MIA Grid will allow the users to collect optimal hyperparameters/data set and train models for the MIA Grid in parts when limited compute is available to run the code:
+
+```
+--start_data_split
+--stop_data_split
+--start_hypers
+--stop_hypers 
+```
+For example, ```python3 src/build_mia_grid_film_td.py -- start_data_split 0 --stop_data_split 5 --start_hypers 0 --stop_hypers 5 --tune``` will sample and collect optimal hyperparameters for  $\ D_0,D_1,D_2,D_3,D_4\$ of the 65 (```--num_shadow_models``` + 1) data sets sampled from $\ D_T\$. 
+
+Once we have the logits for samples in $\ D_T\$ for the models in the MIA Grid:
+* Calculate the LiRA scores of samples using ```python3 src/run_lira_td.py``` when the target architecture is known and can be used to train the shadow models.
+* To simulate LiRA in the Black-Box setting, use ```python3 src/run_lira_bb.py``` where the arguments ```--target_stats_dir``` and ```--shadow_stats_dir``` should point to the logits collected from models trained with the target architecture and the shadow architecture respectively on same data splits sampled from $\ D_T\$.
 
 ### EMPIRICAL PRIVACY LEAKAGE DUE TO HPO (Section VI & VII)
 
-TO BE EDITED
+* Use ```python3 src/train_head_ed_target_models.py``` or  ```python3 src/train_film_ed_target_models.py``` to train the target models in the ED-HPO setting. 
+
+* To run LiRA on the target models in ED-HPO use ```python3 arc/run_lira_ed.py```.
