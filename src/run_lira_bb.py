@@ -16,7 +16,6 @@ class Learner:
     def __init__(self):
         self.args = self.parse_command_line()
         self.scores = {"ACC-LiRA":None,
-                       "WB-LiRA": None,
                        "KL-LiRA":None}
         self.opt_args = {
                        "KL-LiRA":None}
@@ -30,9 +29,6 @@ class Learner:
 
         parser.add_argument("--target_stats_dir", help="Directory to load target stats from.")
         parser.add_argument("--shadow_stats_dir", help="Directory to load shadow stats from.")
-
-        parser.add_argument("--indices_dir", "-c",
-                            help="Directory to load in_indices from.")
         parser.add_argument("--seed", type=int, default=0, help="Seed for datasets, trainloader and opacus")
         parser.add_argument("--exp_id", type=int, default=None,
                             help="Experiment ID.")
@@ -57,7 +53,7 @@ class Learner:
         shadow_model_base = self.args.shadow_stats_dir.split("/")[-2]
         self.target_stats_dir = os.path.join(self.args.target_stats_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
         self.shadow_stats_dir = os.path.join(self.args.shadow_stats_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
-        self.indices_dir = os.path.join(self.args.indices_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
+        self.indices_dir = os.path.join(self.args.target_stats_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
 
         if self.args.exp_id == 1:
             self.target_epsilon = "inf"
@@ -93,7 +89,9 @@ class Learner:
             in_indices = pickle.load(f)
             in_indices = in_indices[:self.args.num_models] 
 
+        # (HPO-ACC)MIA
         self.scores["ACC-LiRA"] = run_acc_lira(target_stats,shadow_stats, in_indices,use_global_variance = False)
+        # (HPO-KL)MIA
         opt_hypers_per_model_min = find_optimal_hypers(target_stats,shadow_stats,in_indices,metric="KL")   
         self.opt_args["KL-LiRA"] = opt_hypers_per_model_min
         self.scores["KL-LiRA"] = run_kl_lira(target_stats,shadow_stats,in_indices,opt_hypers_per_model_min)

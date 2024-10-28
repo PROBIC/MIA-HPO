@@ -33,9 +33,7 @@ class Learner:
     def parse_command_line(self):
         parser = argparse.ArgumentParser()
 
-        parser.add_argument("--result_dir", help="Directory to load shadow stats from.")
-        parser.add_argument("--indices_dir", "-c",
-                            help="Directory to load in_indices from.")
+        parser.add_argument("--results_dir", help="Directory to load shadow stats from.")
         parser.add_argument("--seed", type=int, default=0, help="Seed for datasets, trainloader and opacus")
         parser.add_argument("--exp_id", type=int, default=None,
                             help="Experiment ID.")
@@ -56,9 +54,9 @@ class Learner:
         td_run_id, ed_run_id = get_runs(self.args.examples_per_class)
         self.td_run_dir = f"Run_{td_run_id}"
         self.ed_run_dir = f"Run_{ed_run_id}"
-        self.target_stats_dir = os.path.join(self.args.result_dir, "Seed={}".format(self.args.seed),self.ed_run_dir, self.exp_dir)
-        self.shadow_stats_dir = os.path.join(self.args.result_dir, "Seed={}".format(self.args.seed),self.td_run_dir, self.exp_dir)
-        self.indices_dir = os.path.join(self.args.indices_dir, "Seed={}".format(self.args.seed),self.ed_run_dir, self.exp_dir)
+        self.target_stats_dir = os.path.join(self.args.results_dir, "Seed={}".format(self.args.seed),self.ed_run_dir, self.exp_dir)
+        self.shadow_stats_dir = os.path.join(self.args.results_dir, "Seed={}".format(self.args.seed),self.td_run_dir, self.exp_dir)
+        self.indices_dir = os.path.join(self.args.results_dir, "Seed={}".format(self.args.seed),self.ed_run_dir, self.exp_dir)
 
         if self.args.exp_id == 1:
             self.target_epsilon = "inf"

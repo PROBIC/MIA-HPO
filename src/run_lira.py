@@ -16,7 +16,8 @@ class Learner:
     def __init__(self):
         self.args = self.parse_command_line()
         self.scores = {"ACC-LiRA":None,
-                       "KL-LiRA":None}
+                       "KL-LiRA":None,
+                       "WB-LiRA":None}
         self.opt_args = {
                        "KL-LiRA":None}
 
@@ -27,9 +28,7 @@ class Learner:
     def parse_command_line(self):
         parser = argparse.ArgumentParser()
 
-        parser.add_argument("--stats_dir", help="Directory to load stats from.")
-        parser.add_argument("--indices_dir", "-c",
-                            help="Directory to load in_indices from.")
+        parser.add_argument("--results_dir", help="Directory to load stats/indices from.")
         parser.add_argument("--seed", type=int, default=0, help="Seed for datasets, trainloader and opacus")
         parser.add_argument("--exp_id", type=int, default=None,
                             help="Experiment ID.")
@@ -50,8 +49,8 @@ class Learner:
         # ensure the directory to hold results exists
         self.exp_dir = f"experiment_{self.args.exp_id}"
         self.run_dir = f"Run_{self.args.run_id}"
-        self.stats_dir = os.path.join(self.args.stats_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
-        self.indices_dir = os.path.join(self.args.indices_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
+        self.stats_dir = os.path.join(self.args.results_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
+        self.indices_dir = os.path.join(self.args.results_dir, "Seed={}".format(self.args.seed),self.run_dir, self.exp_dir)
 
         if self.args.exp_id == 1:
             self.target_epsilon = "inf"
@@ -114,7 +113,7 @@ def run_acc_lira(stat, in_indices, use_global_variance=False):
     cmia_stat = []
     for i in range(N):
         cmia_stat.append(stat[i,i,:,:])
-
+    
     n = len(cmia_stat[0])
     # Now we do MIA for each model
     all_scores = []
