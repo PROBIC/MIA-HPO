@@ -54,11 +54,12 @@ class Learner:
         with open(filename, 'rb') as f:
             scores = pickle.load(f)
 
+        palette = {"ACC-LiRA":'lightcoral',"KL-LiRA":'mediumseagreen',"WB-LiRA":'blue'}
         FPRS = [1e-3,1e-2,1e-1]
         fig,ax = plt.subplots(1,1,figsize=(4,4))
         for mia in scores.keys():
             fpr, tpr, _ = plot_roc_curve(scores[mia],FPRS)
-            ax.plot(fpr,tpr,label=mia)
+            ax.plot(fpr,tpr,label=mia,color=palette[mia])
         
         
         ax.plot([0,1],[0,1],color="gray",linestyle="--",label="Random Classifier")
