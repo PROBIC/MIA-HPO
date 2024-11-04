@@ -36,9 +36,11 @@ for our experiments.
 --max_physical_batch_size  <for running under constrained memory> 
 --test_batch_size <for running under constrained memory> 
 ```
+For the FiLM experiments, we used NVIDIA V100 GPUs with 32 GB of memory. While training models on GPU, ```--max_physical_batch_size``` can be used to limit the size of the large logical batches such that they could be accommodated in the GPU Memory.
+
 The arguments ```--private --target_epsilon <1,8> ``` is to implement differential privacy. For the non-DP setting, set ```--target_epsilon -1``` and do not use the ```--private``` flag.
 
-We fixed ```--target_delta 1e-5```  for our experiments.
+We fixed ```--target_delta 1e-5```  for our experiments. 
 
 **Other setup options:**
 
