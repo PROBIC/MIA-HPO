@@ -17,7 +17,11 @@ Additionally, we make use of the following open-source libraries in our experime
 
 ### GENERAL SETUP
 
-We adapted the code provided at https://github.com/cambridge-mlg/dp-few-shot/ and https://github.com/tensorflow/privacy/tree/master/research/mi_lira_2021 for our experiments.
+We adapted the code provided at:
+- https://github.com/cambridge-mlg/dp-few-shot/
+- https://github.com/tensorflow/privacy/tree/master/research/mi_lira_2021
+
+for our experiments.
 
 **General experiment options for training models include:**
 
