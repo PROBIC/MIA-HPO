@@ -23,8 +23,6 @@ import warnings
 from lira import convert_logit_to_prob, calculate_statistic, log_loss
 import pickle
 
-DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
 def main():
     learner = Learner()
     learner.run()
@@ -393,8 +391,8 @@ class Learner:
             labels = []
             predictions = []
             for batch_images, batch_labels in val_loader:
-                batch_images = batch_images.to(DEVICE)
-                batch_labels = batch_labels.type(torch.LongTensor).to(DEVICE)
+                batch_images = batch_images.to(self.device)
+                batch_labels = batch_labels.type(torch.LongTensor).to(self.device)
                 logits = model(batch_images)
                 predictions.append(predict_by_max_logit(logits))
                 labels.append(batch_labels)
@@ -474,7 +472,7 @@ class Learner:
             the statistics and cross-entropy losses
         """
         losses, stat= [], []
-        data = x.to(DEVICE)
+        data = x.to(self.device)
         with torch.no_grad():
             logits = model(data).cpu().numpy()
         prob = convert_logit_to_prob(logits)
